@@ -31,9 +31,18 @@ export function buildPlaceLink(placeId, hl = 'en') {
   return `${API_BASE_URL}/place?place_id=${encodeURIComponent(placeId)}&hl=${hl}`;
 }
 
-// Image proxy URL. Set RAW_IMAGE_URLS=1 in env to disable proxying — useful
-// for debugging or when you need direct CDN URLs in the output.
-const PROXY_IMAGES = process.env.RAW_IMAGE_URLS !== '1';
+// Image-URL strategy.
+//
+// We DEFAULT to RAW Google CDN URLs in stored output (Firestore + places.json).
+// That way the URLs are portable — Flutter, browsers, or any other client
+// can fetch them directly from googleusercontent.com without depending on
+// our proxy server being reachable on a specific host/port.
+//
+// Set `PROXY_IMAGE_URLS=1` to opt into the legacy behaviour of wrapping each
+// Google URL with `${API_BASE_URL}/img?u=...`. That's only useful when:
+//   - you're running the /img proxy on a public hostname (e.g. Cloud Run), AND
+//   - you specifically need server-side caching / CDN-bypass for 429s.
+const PROXY_IMAGES = process.env.PROXY_IMAGE_URLS === '1';
 
 export function proxyImage(url) {
   if (typeof url !== 'string' || !url) return url;
@@ -43,10 +52,13 @@ export function proxyImage(url) {
   return `${API_BASE_URL}/img?u=${encodeURIComponent(url)}`;
 }
 
-// Rewrite any `http(s)://.../img?u=...` URLs embedded in a stored response so
-// they point to the CURRENT API_BASE_URL. This makes stored URLs portable —
-// you can change API_BASE_URL between dev/prod without re-scraping.
+// ── URL-mutation helpers used by the server middleware + scrub script ──
+
+// Match any `http(s)://.../img?u=<encoded-google-url>` segment.
 const PROXY_URL_PATTERN = /https?:\/\/[^"'\s/]+\/img\?u=/g;
+
+// Used by the express middleware: stored URLs may carry a stale base URL;
+// rewrite them so all responses use the CURRENT API_BASE_URL.
 export function rewriteProxyUrls(obj) {
   if (obj == null) return obj;
   if (typeof obj === 'string') {
@@ -56,6 +68,32 @@ export function rewriteProxyUrls(obj) {
   if (typeof obj === 'object') {
     const out = {};
     for (const k of Object.keys(obj)) out[k] = rewriteProxyUrls(obj[k]);
+    return out;
+  }
+  return obj;
+}
+
+// Strip the proxy entirely, returning the raw Google URL that was wrapped.
+// Used by `scrub-firestore.js` to clean URLs left over from when we still
+// stored proxy-wrapped values.
+const SINGLE_PROXY_RE =
+  /https?:\/\/[^"'\s/]+\/img\?u=([^"'\s&]+)/g;
+
+export function stripProxyUrls(obj) {
+  if (obj == null) return obj;
+  if (typeof obj === 'string') {
+    return obj.replace(SINGLE_PROXY_RE, (_, encoded) => {
+      try {
+        return decodeURIComponent(encoded);
+      } catch (_) {
+        return encoded;
+      }
+    });
+  }
+  if (Array.isArray(obj)) return obj.map(stripProxyUrls);
+  if (typeof obj === 'object') {
+    const out = {};
+    for (const k of Object.keys(obj)) out[k] = stripProxyUrls(obj[k]);
     return out;
   }
   return obj;

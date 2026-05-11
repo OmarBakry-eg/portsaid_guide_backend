@@ -9,7 +9,8 @@
     "test:coffee": "node src/index.js --q=coffee --ll=@31.2653,32.3019,15.1z --out=output/coffee.json",
     "server": "node src/server/index.js",
     "all": "node src/run-all.js",
-    "sync-firestore": "node src/sync-firestore.js"
+    "sync-firestore": "node src/sync-firestore.js",
+    "scrub-firestore": "node src/scrub-firestore.js"
   },
   "dependencies": {
     "express": "^5.2.1",
