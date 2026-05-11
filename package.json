@@ -1,0 +1,19 @@
+{
+  "name": "portsaid-gmaps-scraper",
+  "version": "0.1.0",
+  "description": "SerpApi-compatible Google Maps scraper for Port Said city guide",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "scrape": "node src/index.js",
+    "test:coffee": "node src/index.js --q=coffee --ll=@31.2653,32.3019,15.1z --out=output/coffee.json",
+    "server": "node src/server/index.js",
+    "all": "node src/run-all.js",
+    "sync-firestore": "node src/sync-firestore.js"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "firebase-admin": "^13.9.0",
+    "playwright": "^1.49.0"
+  }
+}

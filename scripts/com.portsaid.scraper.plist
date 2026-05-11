@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd plist for the Port Said scraper.
+
+  Runs `npm run all` every 6 hours and pipes the output through
+  `npm run sync-firestore` so the Flutter app receives live updates.
+
+  Install:
+    cp scraper/scripts/com.portsaid.scraper.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.portsaid.scraper.plist
+
+  Inspect:
+    launchctl list | grep portsaid
+    tail -F /tmp/portsaid-scraper.log
+
+  Stop / uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.portsaid.scraper.plist
+    rm ~/Library/LaunchAgents/com.portsaid.scraper.plist
+
+  Edit the absolute paths below to match your machine. The defaults assume
+  this checkout lives at /Users/omarbakry/Desktop/developer/portsaid_guide.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.portsaid.scraper</string>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/omarbakry/Desktop/developer/portsaid_guide/scraper</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <!--
+      Run the scraper for the 10 essential categories at city-center +
+      wide-city. Then sync the resulting store to Firestore.
+
+      We restrict to two anchors here so a single run stays ≤ ~30 min;
+      adjust if you want full multi-anchor coverage at the cost of duration.
+    -->
+    <string>cd /Users/omarbakry/Desktop/developer/portsaid_guide/scraper &amp;&amp; /usr/local/bin/node src/run-all.js --anchors=wide-city,city-center --only=restaurant,coffee,pharmacy,hospital,hotel,supermarket,gas-station,bank,mosque,beach &amp;&amp; /usr/local/bin/node src/sync-firestore.js</string>
+  </array>
+
+  <!--
+    Run every 6 hours (21600 seconds). launchd will fire at this interval
+    starting from when the agent is loaded. If your Mac is asleep at the
+    scheduled time, the run is deferred until the Mac wakes up.
+  -->
+  <key>StartInterval</key>
+  <integer>21600</integer>
+
+  <!-- Run immediately on load so you can verify it works without waiting 6h. -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/portsaid-scraper.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/tmp/portsaid-scraper.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- Used by the Express server (sync-firestore writes from places.json). -->
+    <key>API_BASE_URL</key>
+    <string>http://localhost:8081</string>
+
+    <!-- Firebase project + service-account path. EDIT THESE. -->
+    <key>FIRESTORE_PROJECT</key>
+    <string>port-said-guide</string>
+    <key>GOOGLE_APPLICATION_CREDENTIALS</key>
+    <string>/Users/omarbakry/Desktop/developer/portsaid_guide/scraper/secrets/firebase-service-account.json</string>
+
+    <!-- PATH so Node + npm are found when launchd invokes zsh. -->
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>

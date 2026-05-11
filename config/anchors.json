@@ -1,0 +1,35 @@
+{
+  "$comment": "Geographic anchors for searches. Each scrape covers ~1.5km radius at zoom 15. Together these anchors cover Port Said + Port Fouad. To add coverage, append an anchor — the deduplicator handles overlapping results by place_id.",
+  "anchors": [
+    {
+      "id": "city-center",
+      "label": "Port Said city center (El Sharq)",
+      "ll": "@31.2653,32.3019,15.1z"
+    },
+    {
+      "id": "port-fouad",
+      "label": "Port Fouad (across the canal)",
+      "ll": "@31.2480,32.3270,15z"
+    },
+    {
+      "id": "el-manakh",
+      "label": "El Manakh district (west)",
+      "ll": "@31.2730,32.2870,15z"
+    },
+    {
+      "id": "el-zohour",
+      "label": "El Zohour district (south)",
+      "ll": "@31.2480,32.2870,15z"
+    },
+    {
+      "id": "north-beach",
+      "label": "North beach / corniche",
+      "ll": "@31.2820,32.3050,15z"
+    },
+    {
+      "id": "wide-city",
+      "label": "Whole Port Said + Port Fouad at zoom 14 (catches edge places single-district anchors miss)",
+      "ll": "@31.2386731,32.26457,14z"
+    }
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "$comment": "Search queries the orchestrator runs. `q` is the Google Maps query. `slug` is the category key written to Firestore. `cadence_hours` controls how often this category refreshes — set higher for slow-changing things (mosques, government) and lower for dynamic ones (restaurants).",
+  "categories": [
+    { "slug": "coffee",         "q": "coffee",                "cadence_hours": 6,  "group": "food" },
+    { "slug": "coffee",         "q": "كوفي",                  "hl": "ar", "cadence_hours": 6,  "group": "food" },
+    { "slug": "coffee",         "q": "قهوة",                  "hl": "ar", "cadence_hours": 6,  "group": "food" },
+    { "slug": "restaurant",     "q": "restaurant",            "cadence_hours": 6,  "group": "food" },
+    { "slug": "restaurant",     "q": "مطعم",                  "hl": "ar", "cadence_hours": 6,  "group": "food" },
+    { "slug": "fish-seafood",   "q": "fish restaurant",       "cadence_hours": 12, "group": "food" },
+    { "slug": "fish-seafood",   "q": "مطعم اسماك",            "hl": "ar", "cadence_hours": 12, "group": "food" },
+    { "slug": "fast-food",      "q": "fast food",             "cadence_hours": 12, "group": "food" },
+    { "slug": "fast-food",      "q": "وجبات سريعة",           "hl": "ar", "cadence_hours": 12, "group": "food" },
+    { "slug": "bakery",         "q": "bakery",                "cadence_hours": 12, "group": "food" },
+    { "slug": "bakery",         "q": "مخبز",                  "hl": "ar", "cadence_hours": 12, "group": "food" },
+    { "slug": "dessert",        "q": "dessert",               "cadence_hours": 12, "group": "food" },
+    { "slug": "dessert",        "q": "حلويات",                "hl": "ar", "cadence_hours": 12, "group": "food" },
+
+    { "slug": "hotel",          "q": "hotel",                 "cadence_hours": 24, "group": "lodging" },
+    { "slug": "hotel",          "q": "فندق",                  "hl": "ar", "cadence_hours": 24, "group": "lodging" },
+    { "slug": "hostel",         "q": "hostel",                "cadence_hours": 24, "group": "lodging" },
+
+    { "slug": "pharmacy",       "q": "pharmacy",              "cadence_hours": 12, "group": "health" },
+    { "slug": "pharmacy",       "q": "صيدلية",                "hl": "ar", "cadence_hours": 12, "group": "health" },
+    { "slug": "hospital",       "q": "hospital",              "cadence_hours": 24, "group": "health" },
+    { "slug": "hospital",       "q": "مستشفى",                "hl": "ar", "cadence_hours": 24, "group": "health" },
+    { "slug": "clinic",         "q": "clinic",                "cadence_hours": 24, "group": "health" },
+    { "slug": "clinic",         "q": "عيادة",                 "hl": "ar", "cadence_hours": 24, "group": "health" },
+    { "slug": "dentist",        "q": "dentist",               "cadence_hours": 48, "group": "health" },
+    { "slug": "dentist",        "q": "طبيب اسنان",            "hl": "ar", "cadence_hours": 48, "group": "health" },
+    { "slug": "veterinarian",   "q": "veterinarian",          "cadence_hours": 48, "group": "health" },
+    { "slug": "veterinarian",   "q": "طبيب بيطري",            "hl": "ar", "cadence_hours": 48, "group": "health" },
+
+    { "slug": "supermarket",    "q": "supermarket",           "cadence_hours": 12, "group": "shopping" },
+    { "slug": "supermarket",    "q": "سوبر ماركت",            "hl": "ar", "cadence_hours": 12, "group": "shopping" },
+    { "slug": "grocery",        "q": "grocery store",         "cadence_hours": 12, "group": "shopping" },
+    { "slug": "grocery",        "q": "بقالة",                 "hl": "ar", "cadence_hours": 12, "group": "shopping" },
+    { "slug": "mall",           "q": "shopping mall",         "cadence_hours": 24, "group": "shopping" },
+    { "slug": "clothing",       "q": "clothing store",        "cadence_hours": 24, "group": "shopping" },
+    { "slug": "clothing",       "q": "محل ملابس",             "hl": "ar", "cadence_hours": 24, "group": "shopping" },
+    { "slug": "electronics",    "q": "electronics store",     "cadence_hours": 24, "group": "shopping" },
+    { "slug": "electronics",    "q": "محل الكترونيات",        "hl": "ar", "cadence_hours": 24, "group": "shopping" },
+
+    { "slug": "atm",            "q": "ATM",                   "cadence_hours": 48, "group": "money" },
+    { "slug": "bank",           "q": "bank",                  "cadence_hours": 48, "group": "money" },
+    { "slug": "bank",           "q": "بنك",                   "hl": "ar", "cadence_hours": 48, "group": "money" },
+    { "slug": "money-exchange", "q": "currency exchange",     "cadence_hours": 48, "group": "money" },
+    { "slug": "money-exchange", "q": "صرافة",                 "hl": "ar", "cadence_hours": 48, "group": "money" },
+
+    { "slug": "gas-station",    "q": "gas station",           "cadence_hours": 24, "group": "auto" },
+    { "slug": "gas-station",    "q": "محطة بنزين",            "hl": "ar", "cadence_hours": 24, "group": "auto" },
+    { "slug": "car-wash",       "q": "car wash",              "cadence_hours": 24, "group": "auto" },
+    { "slug": "car-wash",       "q": "غسيل سيارات",           "hl": "ar", "cadence_hours": 24, "group": "auto" },
+    { "slug": "auto-repair",    "q": "auto repair",           "cadence_hours": 24, "group": "auto" },
+    { "slug": "auto-repair",    "q": "ميكانيكي سيارات",       "hl": "ar", "cadence_hours": 24, "group": "auto" },
+    { "slug": "car-rental",     "q": "car rental",            "cadence_hours": 48, "group": "auto" },
+    { "slug": "parking",        "q": "parking",               "cadence_hours": 48, "group": "auto" },
+
+    { "slug": "mosque",         "q": "mosque",                "cadence_hours": 168, "group": "religion" },
+    { "slug": "mosque",         "q": "مسجد",                  "hl": "ar", "cadence_hours": 168, "group": "religion" },
+    { "slug": "church",         "q": "church",                "cadence_hours": 168, "group": "religion" },
+    { "slug": "church",         "q": "كنيسة",                 "hl": "ar", "cadence_hours": 168, "group": "religion" },
+
+    { "slug": "beach",          "q": "beach",                 "cadence_hours": 48, "group": "entertainment" },
+    { "slug": "park",           "q": "park",                  "cadence_hours": 48, "group": "entertainment" },
+    { "slug": "cinema",         "q": "cinema",                "cadence_hours": 24, "group": "entertainment" },
+    { "slug": "gym",            "q": "gym",                   "cadence_hours": 24, "group": "entertainment" },
+    { "slug": "tourist-attr",   "q": "tourist attraction",    "cadence_hours": 48, "group": "entertainment" },
+
+    { "slug": "school",         "q": "school",                "cadence_hours": 168, "group": "education" },
+    { "slug": "university",     "q": "university",            "cadence_hours": 168, "group": "education" },
+    { "slug": "library",        "q": "library",               "cadence_hours": 168, "group": "education" },
+
+    { "slug": "police",         "q": "police station",        "cadence_hours": 168, "group": "government" },
+    { "slug": "post-office",    "q": "post office",           "cadence_hours": 168, "group": "government" },
+
+    { "slug": "taxi",           "q": "taxi stand",            "cadence_hours": 48, "group": "transport" },
+    { "slug": "bus-station",    "q": "bus station",           "cadence_hours": 168, "group": "transport" }
+  ]
+}
