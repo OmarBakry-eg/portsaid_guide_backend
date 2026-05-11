@@ -1,0 +1,152 @@
+name: scrape-and-sync
+
+# Runs the Port Said scraper every 6 hours and pushes the result to Firestore.
+# GitHub Actions free tier covers this easily for a private repo: a full run
+# is ~30 min, so 4 runs/day × 30 days × 30 min ≈ 60 hours/month. Free tier
+# allows 2,000 min/month for private repos.
+#
+# Setup (one-time):
+#   1. Repo Settings → Secrets and variables → Actions → New repository secret
+#         Name:  FIREBASE_SERVICE_ACCOUNT
+#         Value: <paste the entire contents of firebase-service-account.json>
+#   2. Push this file to the default branch.
+#   3. The workflow fires automatically every 6h. Manual run:
+#         Actions → "scrape-and-sync" → Run workflow.
+
+on:
+  # Every 6 hours, at minute 17 UTC (offset from the top-of-hour rush).
+  schedule:
+    - cron: '17 */6 * * *'
+
+  # Manual trigger from the GitHub UI.
+  workflow_dispatch:
+    inputs:
+      categories:
+        description: 'Comma-separated category slugs (blank = default 10)'
+        required: false
+        default: ''
+      anchors:
+        description: 'Comma-separated anchor ids (blank = default 2)'
+        required: false
+        default: ''
+
+# Never run two scrapes simultaneously.
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50  # full scrape is ~30 min, this gives margin
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Cache Playwright Chromium (~150 MB) so we don't re-download every run.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-chromium-1217
+
+      - name: Install Playwright Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium --with-deps
+
+      - name: Install Playwright system deps
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      # Persist data/places.json across runs so `first_seen_at` and the
+      # accumulated city-wide store survive between scrapes.
+      - name: Restore places.json cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: scraper-store-${{ github.run_id }}
+          restore-keys: scraper-store-
+
+      - name: Write Firebase service account from secret
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          mkdir -p secrets
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "::error::FIREBASE_SERVICE_ACCOUNT secret is missing. Add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > secrets/firebase-service-account.json
+          node -e "JSON.parse(require('fs').readFileSync('secrets/firebase-service-account.json'))" || {
+            echo "::error::FIREBASE_SERVICE_ACCOUNT is not valid JSON"
+            exit 1
+          }
+
+      - name: Run scraper
+        env:
+          FIRESTORE_PROJECT: port-said-guide
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/secrets/firebase-service-account.json
+          API_BASE_URL: https://port-said-guide.web.app
+        run: |
+          ONLY="${{ github.event.inputs.categories }}"
+          ANCHORS="${{ github.event.inputs.anchors }}"
+
+          if [ -z "$ONLY" ]; then
+            ONLY="restaurant,coffee,pharmacy,hospital,hotel,supermarket,gas-station,bank,mosque,beach"
+          fi
+          if [ -z "$ANCHORS" ]; then
+            ANCHORS="wide-city,city-center"
+          fi
+
+          echo "scraping categories=$ONLY anchors=$ANCHORS"
+          node src/run-all.js --force --only="$ONLY" --anchors="$ANCHORS" --delay=8
+
+      - name: Sync to Firestore
+        env:
+          FIRESTORE_PROJECT: port-said-guide
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/secrets/firebase-service-account.json
+        run: node src/sync-firestore.js
+
+      # Save the merged store so the next run inherits first_seen_at etc.
+      - name: Save places.json cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: scraper-store-${{ github.run_id }}
+
+      # Make the store downloadable for inspection (7-day retention).
+      - name: Upload store artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: places-store-${{ github.run_id }}
+          path: data/places.json
+          retention-days: 7
+
+      - name: Run summary
+        if: always()
+        run: |
+          if [ -f data/places.json ]; then
+            node -e "
+              const s = JSON.parse(require('fs').readFileSync('data/places.json','utf8'));
+              const places = Object.values(s.places ?? {});
+              console.log('TOTAL:', places.length, 'places');
+              const cats = {};
+              for (const p of places) for (const c of p.source_categories ?? []) cats[c] = (cats[c] ?? 0) + 1;
+              for (const [k,v] of Object.entries(cats).sort((a,b) => b[1] - a[1])) {
+                console.log('  ' + k.padEnd(16) + ' ' + v);
+              }
+            "
+          fi
