@@ -4,6 +4,26 @@ A Node.js scraper that returns Google Maps search results in **SerpApi's exact
 schema**, without paying SerpApi. Designed to feed the Port Said city-guide app
 with periodically refreshed place data.
 
+## 🚀 Deployment status
+
+| Component | Where | URL |
+|---|---|---|
+| **Scheduled scraper** | GitHub Actions (every 6h at `:17` UTC) | [Actions tab](https://github.com/OmarBakry-eg/portsaid_guide_backend/actions) |
+| **HTTP API server** | Render Web Service (free tier) | https://portsaid-guide-backend.onrender.com |
+| **Place store** | Firestore (`port-said-guide` project, `places` collection) | — |
+| **Mobile app** | Flutter (iOS + Android) reading Firestore in real time | — |
+
+### Health check
+
+```sh
+curl https://portsaid-guide-backend.onrender.com/healthz
+# → {"ok":true,"ts":"…","store_places":N}
+```
+
+> The Render free plan sleeps after 15 min of inactivity. First request after
+> a long pause takes ~30s while the container wakes up. Subsequent requests
+> are sub-second.
+
 ## What it does
 
 Given a search query and a map center (`lat,lon,zoom`), it:
@@ -214,30 +234,71 @@ export API_BASE_URL=https://api.portsaid.app
 export PORT=8080
 ```
 
-## Recommended deployment (Google Cloud)
+## Current production deployment
 
 ```
-┌──────────────────────────┐    ┌──────────────────────────┐
-│ Cloud Scheduler          │    │ Cloud Run Job            │
-│ cron: 0 */6 * * *        │───▶│ Docker image w/ scraper  │
-│                          │    │ runs run-all.js          │
-└──────────────────────────┘    └────────────┬─────────────┘
-                                             ▼
-                                ┌──────────────────────────┐
-                                │ Firestore                │
-                                │ (places collection)      │
-                                └────────────┬─────────────┘
-                                             ▼
-                                ┌──────────────────────────┐
-                                │ Flutter app              │
-                                │ (cloud_firestore SDK)    │
-                                └──────────────────────────┘
+┌─────────────────────────────┐  every 6h  ┌─────────────────────────┐
+│ GitHub Actions              │ ─────────▶ │ Headless Chromium runner │
+│ .github/workflows/scrape.yml│            │ scrapes Google Maps      │
+└─────────────────────────────┘            │ writes places.json       │
+                                           │ pushes to Firestore      │
+                                           └────────────┬─────────────┘
+                                                        ▼
+┌─────────────────────────────┐            ┌─────────────────────────┐
+│ Render Web Service          │ on-demand  │ Firestore               │
+│ portsaid-guide-backend      │ ────────▶  │ port-said-guide/places  │
+│ /refresh /img /place /…     │            │ (1,786 docs)            │
+└─────────────────────────────┘            └────────────┬─────────────┘
+        ▲                                                │ real-time
+        │ POST /refresh                                  │
+        │ when user opens                                ▼
+        │ a place's detail            ┌─────────────────────────┐
+        │                             │ Flutter app             │
+        └─────────────────────────────┤ cloud_firestore SDK     │
+                                      └─────────────────────────┘
 ```
 
-Cost estimate: free tier covers it on Google Cloud's free quotas for a single
-city. Cloud Scheduler is free for 3 jobs/month; Cloud Run charges only for
-the ~2 hours of CPU per refresh (≈ $0.50/month); Firestore reads from the
-Flutter app fall under the free 50k/day quota easily.
+### Render service config (already set)
+
+| Setting | Value |
+|---|---|
+| Runtime | Node |
+| Build command | `npm install && npx playwright install chromium` |
+| Start command | `node src/server/index.js` |
+| Health check path | `/healthz` |
+| Env: `FIRESTORE_PROJECT` | `port-said-guide` |
+| Env: `GOOGLE_APPLICATION_CREDENTIALS` | `/etc/secrets/firebase-service-account.json` |
+| Env: `PLAYWRIGHT_BROWSERS_PATH` | `0` |
+| Env: `API_BASE_URL` | `https://portsaid-guide-backend.onrender.com` |
+| Secret file | `/etc/secrets/firebase-service-account.json` (Firebase Admin SDK JSON) |
+
+If the Node runtime ever fails to launch Chromium (missing system libs), the
+repo also ships a [`Dockerfile`](./Dockerfile) that uses Microsoft's official
+Playwright image with every apt dependency pre-installed. Switch Render's
+runtime from Node to Docker in the service settings — no other changes needed.
+
+### GitHub Actions (cron)
+
+The scheduled scrape is configured in
+[`.github/workflows/scrape.yml`](.github/workflows/scrape.yml). It needs one
+secret in the repo settings:
+
+- `FIREBASE_SERVICE_ACCOUNT` — full JSON contents of the Firebase Admin
+  service-account key.
+
+### Cost reality
+
+Both Render (web service) and GitHub Actions (cron) are on free tiers:
+
+- **Render free**: 750 service hours/month — auto-sleeps after 15 min idle
+  so we use far less. First request after sleep adds ~30s cold-start.
+- **GitHub Actions free**: 2,000 minutes/month for private repos. Our 4×/day
+  × ~30 min runs ≈ 60 h/month, well within budget.
+- **Firestore free**: 50,000 reads/day, 20,000 writes/day. A city-guide
+  with ~1,800 places hits ~2k writes per cron run and the app reads cached
+  data, so we stay well below the quota.
+
+Total monthly cost: **$0**.
 
 ## Flutter integration sketch
 

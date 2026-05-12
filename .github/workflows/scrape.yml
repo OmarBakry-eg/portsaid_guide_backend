@@ -97,7 +97,10 @@ jobs:
         env:
           FIRESTORE_PROJECT: port-said-guide
           GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/secrets/firebase-service-account.json
-          API_BASE_URL: https://port-said-guide.web.app
+          # Public base for any URLs the scraper emits. Image URLs default to
+          # raw Google CDN now (see config.js); this only matters if you set
+          # PROXY_IMAGE_URLS=1 to opt into server-side proxying.
+          API_BASE_URL: https://portsaid-guide-backend.onrender.com
         run: |
           ONLY="${{ github.event.inputs.categories }}"
           ANCHORS="${{ github.event.inputs.anchors }}"
