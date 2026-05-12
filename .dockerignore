@@ -1,0 +1,9 @@
+node_modules
+data
+output
+raw
+secrets
+.git
+.github
+*.log
+.DS_Store
