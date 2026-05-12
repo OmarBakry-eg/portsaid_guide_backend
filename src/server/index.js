@@ -404,11 +404,21 @@ app.post('/refresh', async (req, res) => {
         source_categories: existing?.source_categories ?? [],
         source_anchors: [...new Set([...(existing?.source_anchors ?? []), 'on-demand'])],
       };
-      // Persist locally too so subsequent reads see it.
-      const STORE_PATH = new URL('../../data/places.json', import.meta.url).pathname;
-      const cur = JSON.parse(await readFile(STORE_PATH, 'utf8'));
-      cur.places[place_id] = merged;
-      await writeFile(STORE_PATH, JSON.stringify(cur, null, 2));
+      // Best-effort: persist locally too so subsequent reads see it. On
+      // hosts with an ephemeral filesystem (Render free tier, Cloud Run)
+      // this fails harmlessly — Firestore is the source of truth.
+      try {
+        const localStorePath =
+            new URL('../../data/places.json', import.meta.url).pathname;
+        const cur = existsSync(localStorePath)
+            ? JSON.parse(await readFile(localStorePath, 'utf8'))
+            : { places: {} };
+        cur.places[place_id] = merged;
+        await writeFile(localStorePath, JSON.stringify(cur, null, 2));
+      } catch (e) {
+        // Likely a read-only / missing directory — Firestore push below is
+        // still the canonical update.
+      }
 
       // Push to Firestore (if configured). Silently no-op if creds missing —
       // we still updated the local store, which the app reads via /places.
@@ -437,8 +447,10 @@ app.get('/healthz', async (_req, res) => {
   });
 });
 
-app.listen(SERVER_PORT, () => {
-  console.log(`◆ scraper API on http://localhost:${SERVER_PORT}`);
+// Bind explicitly to 0.0.0.0 — Render (and most container hosts) require the
+// process to listen on all interfaces, not just localhost.
+app.listen(SERVER_PORT, '0.0.0.0', () => {
+  console.log(`◆ scraper API on http://0.0.0.0:${SERVER_PORT}`);
   console.log(`  GET /place?place_id=ChIJ...`);
   console.log(`  GET /reviews?data_id=0x...:0x...&next_page_token=...`);
   console.log(`  GET /photos?data_id=0x...:0x...&next_page_token=...`);
