@@ -10,7 +10,8 @@
     "server": "node src/server/index.js",
     "all": "node src/run-all.js",
     "sync-firestore": "node src/sync-firestore.js",
-    "scrub-firestore": "node src/scrub-firestore.js"
+    "scrub-firestore": "node src/scrub-firestore.js",
+    "rescore-firestore": "node src/rescore-firestore.js"
   },
   "dependencies": {
     "express": "^5.2.1",

@@ -1,5 +1,6 @@
 import { pick } from '../util/pb.js';
 import { buildReviewsLink, buildPhotosLink, buildPlaceLink, proxyImage } from '../config.js';
+import { enrichWithScores } from './scoring.js';
 
 // Each result in the Google Maps `pb` response is shaped like [null, [...place]]
 // where the inner array (260+ entries, mostly null) holds every place field.
@@ -375,5 +376,7 @@ export function parsePlace(result, position) {
 
   // Strip undefined keys for SerpApi-style compact output.
   for (const k of Object.keys(out)) if (out[k] === undefined) delete out[k];
-  return out;
+  // Attach weighted_rating / quality_score / sort_score so downstream sorts
+  // and filters can operate on a single field without recomputing.
+  return enrichWithScores(out);
 }

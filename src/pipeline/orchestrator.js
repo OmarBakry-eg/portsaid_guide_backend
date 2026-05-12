@@ -105,7 +105,7 @@ export async function runOrchestrator({
       };
       runSummary.jobs.push({ key: job.key, status: 'ok', elapsed_ms: elapsed, ...stats });
       console.log(
-        `${stats.found} found (+${stats.new} new, ~${stats.updated} updated)  ${fmtElapsed(elapsed)}`
+        `${stats.found} found (+${stats.new} new, ~${stats.updated} updated, ${stats.rejected ?? 0} rejected)  ${fmtElapsed(elapsed)}`
       );
     } catch (e) {
       const elapsed = Date.now() - jobStart;

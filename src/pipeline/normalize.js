@@ -2,6 +2,8 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+import { enrichWithScores, isAccepted } from '../parsers/scoring.js';
+
 // Merge a fresh SerpApi-shaped scrape result into a persistent place record.
 // Returns the merged record + a change classification used for telemetry.
 export function mergePlace(prev, fresh, { now, scrapeRunId, category, anchorId }) {
@@ -67,6 +69,10 @@ export function mergePlace(prev, fresh, { now, scrapeRunId, category, anchorId }
   // Drop fields with no value so the document stays lean.
   for (const k of Object.keys(merged)) if (merged[k] === undefined) delete merged[k];
 
+  // Recompute scoring on the merged record — fresh signals (new reviews,
+  // newly-added photos) can move both weighted_rating and quality_score.
+  enrichWithScores(merged);
+
   return { merged, changes };
 }
 
@@ -91,10 +97,17 @@ export async function saveStore(path, store) {
 // Apply a SerpApi-shaped scrape result to the store, returning a diff summary.
 export function applyScrape(store, scrapeResult, { scrapeRunId, category, anchorId }) {
   const now = new Date().toISOString();
-  const stats = { found: 0, new: 0, updated: 0, unchanged: 0 };
+  const stats = { found: 0, rejected: 0, new: 0, updated: 0, unchanged: 0 };
   for (const place of scrapeResult.local_results ?? []) {
     if (!place.place_id) continue;
     stats.found += 1;
+    // Trust-and-safety: skip places that look like fake / mis-categorised
+    // pins (no photo + no address + zero reviews, or outside the city
+    // bounding box).
+    if (!isAccepted(place)) {
+      stats.rejected += 1;
+      continue;
+    }
     const prev = store.places[place.place_id];
     const { merged, changes } = mergePlace(prev, place, {
       now, scrapeRunId, category, anchorId,

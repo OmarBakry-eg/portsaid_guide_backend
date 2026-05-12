@@ -52,6 +52,9 @@ async function getFirestore() {
     });
   }
   _db = admin.default.firestore();
+  // Brand-new places may have no rating / weighted_rating yet. Treat
+  // `undefined` field values as "field absent" instead of throwing.
+  _db.settings({ ignoreUndefinedProperties: true });
   return _db;
 }
 
