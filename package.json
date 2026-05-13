@@ -11,11 +11,14 @@
     "all": "node src/run-all.js",
     "sync-firestore": "node src/sync-firestore.js",
     "scrub-firestore": "node src/scrub-firestore.js",
-    "rescore-firestore": "node src/rescore-firestore.js"
+    "rescore-firestore": "node src/rescore-firestore.js",
+    "recategorize:dry-run": "node src/recategorize-firestore.js --dry-run",
+    "recategorize:apply": "node src/recategorize-firestore.js --apply"
   },
   "dependencies": {
     "express": "^5.2.1",
     "firebase-admin": "^13.9.0",
+    "groq-sdk": "^0.7.0",
     "playwright": "^1.49.0"
   }
 }

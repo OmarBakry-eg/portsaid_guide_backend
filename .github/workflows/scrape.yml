@@ -119,6 +119,14 @@ jobs:
           # raw Google CDN now (see config.js); this only matters if you set
           # PROXY_IMAGE_URLS=1 to opt into server-side proxying.
           API_BASE_URL: https://portsaid-guide-backend.onrender.com
+          # Groq API keys for the hybrid classifier (4-key rotation, JSON
+          # mode on llama-3.1-8b-instant). Missing keys are tolerated —
+          # the classifier falls back to deterministic heuristics, but
+          # quality is materially better with the LLM in the loop.
+          GROQ1: ${{ secrets.GROQ1 }}
+          GROQ2: ${{ secrets.GROQ2 }}
+          GROQ3: ${{ secrets.GROQ3 }}
+          GROQ4: ${{ secrets.GROQ4 }}
         run: |
           ONLY="${{ github.event.inputs.categories }}"
           ANCHORS="${{ github.event.inputs.anchors }}"
