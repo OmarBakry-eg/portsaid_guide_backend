@@ -230,6 +230,170 @@ export const GOOGLE_TYPE_TO_SLUG = Object.freeze({
 
   'Bus station': 'bus-station',
   'Bus stop': 'bus-station',
+  'Ferry service': 'bus-station',
+
+  // ── Cuisine-specific restaurant types ──────────────────────────────
+  // Google emits cuisine subtypes; all map to the general restaurant
+  // slug since we don't (yet) want a chip per cuisine.
+  'Vegetarian restaurant': 'restaurant',
+  'Middle Eastern restaurant': 'restaurant',
+  'American restaurant': 'restaurant',
+  'Western restaurant': 'restaurant',
+  'European restaurant': 'restaurant',
+  'Syrian restaurant': 'restaurant',
+  'Greek restaurant': 'restaurant',
+  'Japanese restaurant': 'restaurant',
+  'Sushi restaurant': 'restaurant',
+  'Korean restaurant': 'restaurant',
+  'Izakaya restaurant': 'restaurant',
+  'Grill restaurant': 'restaurant',
+  'BBQ restaurant': 'restaurant',
+  'Koshari restaurant': 'fast-food',
+  'Falafel shop': 'fast-food',
+  'Steak house': 'restaurant',
+  'مطعم مأكولات مشوية': 'restaurant',
+  'مطعم كشري': 'fast-food',
+  'مطعم فلافل': 'fast-food',
+  'مطعم مأكولات بحرية': 'fish-seafood',
+
+  // ── Coffee variants ────────────────────────────────────────────────
+  'متجر القهوة': 'coffee',
+  'محمصة قهوة': 'coffee',
+  'كافتيريا': 'coffee',
+  'مقهى للشيشة/الأرجيلة': 'coffee',
+  'Coffee roastery': 'coffee',
+  'Shisha cafe': 'coffee',
+
+  // ── Hospital / clinic subtypes ─────────────────────────────────────
+  'مستشفى الولادة': 'hospital',
+  'مستشفى عام': 'hospital',
+  'المركز الطبي العام': 'clinic',
+  'مركز التصوير التشخيصي الطبي': 'clinic',
+  'طبيب أمراض نسائية و توليد': 'clinic',
+  'طبيب أمراض نسائية': 'clinic',
+  'أخصائي أشعة': 'clinic',
+  'مركز رعاية يومية للأطفال': 'clinic',
+
+  // ── Hotel / hostel subtypes ────────────────────────────────────────
+  'فندق منتجع': 'hotel',
+  'بيت شباب': 'hostel',
+
+  // ── Supermarket / grocery subtypes ─────────────────────────────────
+  'Discount supermarket': 'supermarket',
+  'متجر لبيع المكسرات': 'grocery',
+  'متجر أغذية صحية': 'grocery',
+
+  // ── Auto / transport subtypes ──────────────────────────────────────
+  // `auto-parts` isn't a curated slug yet (would conflict with the
+  // schema). Fold under auto-repair — closest semantic match; users
+  // looking for auto-repair are likely happy to see parts stores too.
+  'سوق قطع غيار السيارات': 'auto-repair',
+  'متجر قطع غيار السيارات': 'auto-repair',
+  'Auto parts store': 'auto-repair',
+  'موقف سيارات': 'parking',
+  'خدمة العناية الشاملة بالسيارة': 'auto-repair',
+  'مغسلة سيارات ذاتية الخدمة': 'car-wash',
+  // Transport service — fold under taxi (closest user-facing match).
+  'خدمة وسائل النقل': 'taxi',
+  'Transportation service': 'taxi',
+
+  // ── Electronics / phone variants ───────────────────────────────────
+  'متجر هواتف جوالة': 'electronics',
+  'متجر هواتف': 'electronics',
+  'Telecommunications service provider': 'electronics',
+
+  // ── Veterinary variants ────────────────────────────────────────────
+  'Veterinary pharmacy': 'veterinarian',
+  'صيدلية بيطرية': 'veterinarian',
+
+  // ── Arabic-language type returns ───────────────────────────────────
+  // Google sometimes responds to Arabic queries (hl=ar) with the
+  // place's type localised. Without these entries, large Egyptian-
+  // Arabic batches all fall to the LLM tier or "other" — adding them
+  // here is essentially free and pushes thousands of docs to the rules
+  // fast-path instead of the slow path.
+  'مقهى': 'coffee',
+  'كافيه': 'coffee',
+  'كافيتيريا': 'coffee',
+  'مطعم': 'restaurant',
+  'Barbecue restaurant': 'restaurant',
+  'Breakfast restaurant': 'restaurant',
+  'Buffet restaurant': 'restaurant',
+  'Brunch restaurant': 'restaurant',
+  'مطعم وجبات سريعة': 'fast-food',
+  'بيتزا': 'fast-food',
+  'Creperie': 'fast-food',
+  'كريب': 'fast-food',
+  'Crepe restaurant': 'fast-food',
+  'Takeout restaurant': 'fast-food',
+  'مطعم تيك أواي': 'fast-food',
+  'مخبز': 'bakery',
+  'حلواني': 'dessert',
+  'مطعم حلويات': 'dessert',
+  'فندق': 'hotel',
+  'بيت ضيافة': 'hostel',
+  'مبيت وإفطار': 'hostel',
+  'صيدلية': 'pharmacy',
+  'مستشفى': 'hospital',
+  'مركز طبي': 'clinic',
+  'مركز الصحة المجتمعية': 'clinic',
+  'عيادة': 'clinic',
+  'عيادة طبية': 'clinic',
+  'طبيب اسنان': 'dentist',
+  'طبيب أسنان': 'dentist',
+  'عيادة أسنان': 'dentist',
+  'سوبر ماركت': 'supermarket',
+  'سوبرماركت': 'supermarket',
+  'هايبر ماركت': 'supermarket',
+  'هايبرماركت': 'supermarket',
+  'بقالة': 'grocery',
+  'مركز تسوق': 'mall',
+  'متجر بقالة': 'grocery',
+  'Natural goods store': 'grocery',
+  'Convenience store': 'grocery',
+  'محل ملابس': 'clothing',
+  'متجر ملابس': 'clothing',
+  'محل أحذية': 'shoe-store',
+  'متجر أحذية': 'shoe-store',
+  'محل موبايلات': 'electronics',
+  'محل إلكترونيات': 'electronics',
+  'محل هدايا': 'gift-shop',
+  'محل ألعاب': 'toy-store',
+  'مكتبة': 'bookstore',
+  'محل ورد': 'florist',
+  'محل مجوهرات': 'jewelry',
+  'محل ذهب': 'jewelry',
+  'بنك': 'bank',
+  'مصرف': 'bank',
+  'صراف آلي': 'atm',
+  'ماكينة صراف آلي': 'atm',
+  'محل صرافة': 'money-exchange',
+  'محطة وقود': 'gas-station',
+  'محطة بنزين': 'gas-station',
+  'مغسلة سيارات': 'car-wash',
+  'ورشة سيارات': 'auto-repair',
+  'ميكانيكي سيارات': 'auto-repair',
+  'مرآب': 'parking',
+  'مسجد': 'mosque',
+  'كنيسة': 'church',
+  'كاتدرائية': 'church',
+  'شاطئ': 'beach',
+  'حديقة': 'park',
+  'منتزه': 'park',
+  'سينما': 'cinema',
+  'صالة ألعاب رياضية': 'gym',
+  'نادي رياضي': 'gym',
+  'متحف': 'tourist-attr',
+  'معلم سياحي': 'tourist-attr',
+  'مدرسة': 'school',
+  'جامعة': 'university',
+  'كلية': 'university',
+  'مكتبة عامة': 'library',
+  'مركز شرطة': 'police',
+  'قسم شرطة': 'police',
+  'مكتب بريد': 'post-office',
+  'موقف تاكسي': 'taxi',
+  'محطة حافلات': 'bus-station',
 });
 
 /// Generic Google types that we deliberately DON'T map to anything — they
