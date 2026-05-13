@@ -4,3 +4,6 @@ raw/
 data/
 secrets/
 *.log
+# Belt-and-braces for env files anywhere in the tree
+.env
+.env.*
