@@ -1,9 +1,15 @@
 name: scrape-and-sync
 
 # Runs the Port Said scraper every 6 hours and pushes the result to Firestore.
-# GitHub Actions free tier covers this easily for a private repo: a full run
-# is ~30 min, so 4 runs/day × 30 days × 30 min ≈ 60 hours/month. Free tier
-# allows 2,000 min/month for private repos.
+#
+# Timing notes:
+#   - GitHub Actions free tier on private repos: 2,000 min/month.
+#   - GitHub's hard ceiling for a single job is 360 min (6h); we use 350
+#     to leave a margin for the runner's own teardown.
+#   - As the catalogue grows the scrape gets slower; the cap should sit
+#     comfortably above the longest observed run, not just the average.
+#     A run that's cancelled mid-way leaves Firestore in a half-synced
+#     state — better to over-allocate than truncate.
 #
 # Setup (one-time):
 #   1. Repo Settings → Secrets and variables → Actions → New repository secret
@@ -35,10 +41,22 @@ concurrency:
   group: scrape
   cancel-in-progress: false
 
+# Opt the workflow into Node 24 runtime for JavaScript actions. The
+# `@v4` major versions of actions/checkout, actions/setup-node, etc.
+# still ship a Node 20 entry point; GitHub is deprecating Node 20 on
+# 16 Sept 2026. Setting this now silences the deprecation warning and
+# lets us run on the long-term-supported runtime without waiting for
+# every action to publish a `@v5`.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 50  # full scrape is ~30 min, this gives margin
+    # GitHub's hard ceiling is 360 min; 350 leaves room for runner
+    # teardown + log upload. Previous value was 50 min which started
+    # cancelling runs mid-scrape as the catalogue grew.
+    timeout-minutes: 350
 
     steps:
       - name: Checkout repo
