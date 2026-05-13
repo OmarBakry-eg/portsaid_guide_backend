@@ -17,7 +17,7 @@ import { scrapePhotos } from '../scrapers/photos.js';
 import { getCached, setCached } from './cache.js';
 import { imgProxyHandler } from './img-proxy.js';
 import { CACHE_TTL_MS, SERVER_PORT, API_BASE_URL, rewriteProxyUrls } from '../config.js';
-import { uploadOnePlace } from '../pipeline/firestore.js';
+import { listAllPlaces, uploadOnePlace } from '../pipeline/firestore.js';
 
 const STORE_PATH = new URL('../../data/places.json', import.meta.url).pathname;
 const REVIEWS_PER_PAGE = 8;
@@ -297,34 +297,42 @@ function normalizeCategory(raw, available) {
 // discoverability view — users (and us, when triaging the classifier)
 // can see the long tail of place types in the catalogue at a glance.
 //
+// **Source of truth: Firestore.** On Render's ephemeral filesystem the
+// on-disk `places.json` is empty until the cron writes it, but the real
+// catalogue lives in Firestore at all times. We list it once and cache
+// the rolled-up index for `PLACE_TYPES_CACHE_MS`; only the cron job
+// changes the underlying data, so a 5-minute cache is generous.
+//
 // Optional query params:
 //   ?lang=en|ar   — filter to only types that look Latin / Arabic
 //   ?limit=N      — cap the response to the top N types (default: no cap)
 //   ?with_examples=1  — include up to 3 example place names per type
-//
-// Notes:
-//   - Reads from the local store on disk. On Render's ephemeral fs the
-//     store may be empty until the cron has populated it — the response
-//     in that case is `{ count: 0, types: [] }`, which the app should
-//     render as "no data yet".
-//   - We deliberately don't sort by Google's primary `type` only; some
-//     places also have entries in `types[]` that aren't in `type`.
-//     Those are merged into the same counts so e.g. a place typed
-//     "Hypermarket" with a secondary type "Supermarket" contributes
-//     to both buckets.
-app.get('/place-types', async (req, res) => {
-  const store = await loadStore();
-  const lang = req.query.lang === 'ar' || req.query.lang === 'en'
-      ? req.query.lang
-      : null;
-  const limit = parseInt(req.query.limit, 10);
-  const withExamples = req.query.with_examples === '1';
+//   ?force=1      — bypass the in-process cache and re-list from Firestore
 
-  const counts = new Map();          // type → count
-  const examples = new Map();        // type → [titles]
-  const isArabic = (s) => /[؀-ۿ]/.test(s); // Arabic Unicode block
+const PLACE_TYPES_CACHE_MS = 5 * 60 * 1000;
+let _placeTypesCache = null; // { generatedAt, index: { totalPlaces, perType: Map<string, {count, examples}> }, error? }
 
-  for (const p of Object.values(store.places)) {
+async function buildPlaceTypesIndex() {
+  // Try Firestore first (production / configured). Fall back to the
+  // local store if Firestore isn't reachable — useful for dev work
+  // where someone is iterating on the endpoint without credentials.
+  let places;
+  try {
+    places = await listAllPlaces();
+  } catch (e) {
+    const store = await loadStore();
+    places = Object.values(store.places ?? {});
+    if (places.length === 0) {
+      // Re-throw the Firestore error so the caller can surface it —
+      // an empty local store + Firestore failure means we genuinely
+      // have nothing to return.
+      throw e;
+    }
+  }
+
+  const perType = new Map(); // type → { count, examples }
+  for (const p of places) {
+    if (!p) continue;
     const variants = new Set();
     if (typeof p.type === 'string' && p.type.trim()) variants.add(p.type.trim());
     if (Array.isArray(p.types)) {
@@ -333,30 +341,77 @@ app.get('/place-types', async (req, res) => {
       }
     }
     for (const t of variants) {
-      if (lang === 'ar' && !isArabic(t)) continue;
-      if (lang === 'en' && isArabic(t)) continue;
-      counts.set(t, (counts.get(t) ?? 0) + 1);
-      if (withExamples) {
-        const arr = examples.get(t) ?? [];
-        if (arr.length < 3 && p.title) arr.push(p.title);
-        examples.set(t, arr);
+      let bucket = perType.get(t);
+      if (!bucket) {
+        bucket = { count: 0, examples: [] };
+        perType.set(t, bucket);
+      }
+      bucket.count += 1;
+      if (bucket.examples.length < 3 && typeof p.title === 'string') {
+        bucket.examples.push(p.title);
       }
     }
   }
+  return { totalPlaces: places.length, perType };
+}
 
-  let list = [...counts.entries()].map(([type, count]) => ({
-    type,
-    count,
-    is_arabic: isArabic(type),
-    ...(withExamples ? { examples: examples.get(type) ?? [] } : {}),
-  }));
+async function getPlaceTypesIndex(force) {
+  const now = Date.now();
+  if (
+    !force &&
+    _placeTypesCache &&
+    now - _placeTypesCache.generatedAt < PLACE_TYPES_CACHE_MS
+  ) {
+    return _placeTypesCache;
+  }
+  const index = await buildPlaceTypesIndex();
+  _placeTypesCache = { generatedAt: now, index };
+  return _placeTypesCache;
+}
+
+app.get('/place-types', async (req, res) => {
+  const lang = req.query.lang === 'ar' || req.query.lang === 'en'
+      ? req.query.lang
+      : null;
+  const limit = parseInt(req.query.limit, 10);
+  const withExamples = req.query.with_examples === '1';
+  const force = req.query.force === '1';
+  // Arabic Unicode block — catches Persian-script characters too, but
+  // for "is this string in an Arabic script" that's the right call.
+  const isArabic = (s) => /[؀-ۿ]/.test(s);
+
+  let cache;
+  try {
+    cache = await getPlaceTypesIndex(force);
+  } catch (e) {
+    return res.status(503).json({
+      error: 'place-types unavailable',
+      detail: e.message,
+      hint:
+        'The endpoint reads from Firestore; check the server has ' +
+        'FIRESTORE_PROJECT + GOOGLE_APPLICATION_CREDENTIALS configured.',
+    });
+  }
+
+  const { totalPlaces, perType } = cache.index;
+  let list = [...perType.entries()]
+    .filter(([type]) =>
+      lang === 'ar' ? isArabic(type) : lang === 'en' ? !isArabic(type) : true
+    )
+    .map(([type, bucket]) => ({
+      type,
+      count: bucket.count,
+      is_arabic: isArabic(type),
+      ...(withExamples ? { examples: bucket.examples.slice(0, 3) } : {}),
+    }));
   list.sort((a, b) => b.count - a.count || a.type.localeCompare(b.type));
   if (Number.isFinite(limit) && limit > 0) list = list.slice(0, limit);
 
   res.json({
     count: list.length,
-    total_places: Object.keys(store.places).length,
+    total_places: totalPlaces,
     types: list,
+    cache_age_ms: Date.now() - cache.generatedAt,
   });
 });
 

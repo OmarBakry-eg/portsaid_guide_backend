@@ -73,6 +73,22 @@ function sanitizeForFirestore(place) {
   return out;
 }
 
+/// Read every place document from Firestore as a plain array. Used by
+/// the public API endpoints (`/place-types`, eventually `/places` /
+/// `/categories`) so they have a real source of truth in production
+/// where the on-disk `places.json` is ephemeral. Returns an array of
+/// place objects in whatever order Firestore enumerates them; callers
+/// sort / aggregate as needed.
+///
+/// Cheap to call — Firestore charges ~1 read per document. The web
+/// server caches the result locally (see `/place-types` impl) so this
+/// only fires once per cache window per process.
+export async function listAllPlaces() {
+  const db = await getFirestore();
+  const snap = await db.collection('places').get();
+  return snap.docs.map((d) => d.data());
+}
+
 // Upload one place to Firestore. Used by both the bulk sync and the
 // per-place on-demand refresh from the server.
 export async function uploadOnePlace(place) {
