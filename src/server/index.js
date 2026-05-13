@@ -290,6 +290,76 @@ function normalizeCategory(raw, available) {
   return null;
 }
 
+// ----- /place-types — every distinct Google `type` value with counts -----
+//
+// Returns the raw Google Maps category string for every place we know
+// about, grouped by `type` with counts. The Flutter app uses this as a
+// discoverability view — users (and us, when triaging the classifier)
+// can see the long tail of place types in the catalogue at a glance.
+//
+// Optional query params:
+//   ?lang=en|ar   — filter to only types that look Latin / Arabic
+//   ?limit=N      — cap the response to the top N types (default: no cap)
+//   ?with_examples=1  — include up to 3 example place names per type
+//
+// Notes:
+//   - Reads from the local store on disk. On Render's ephemeral fs the
+//     store may be empty until the cron has populated it — the response
+//     in that case is `{ count: 0, types: [] }`, which the app should
+//     render as "no data yet".
+//   - We deliberately don't sort by Google's primary `type` only; some
+//     places also have entries in `types[]` that aren't in `type`.
+//     Those are merged into the same counts so e.g. a place typed
+//     "Hypermarket" with a secondary type "Supermarket" contributes
+//     to both buckets.
+app.get('/place-types', async (req, res) => {
+  const store = await loadStore();
+  const lang = req.query.lang === 'ar' || req.query.lang === 'en'
+      ? req.query.lang
+      : null;
+  const limit = parseInt(req.query.limit, 10);
+  const withExamples = req.query.with_examples === '1';
+
+  const counts = new Map();          // type → count
+  const examples = new Map();        // type → [titles]
+  const isArabic = (s) => /[؀-ۿ]/.test(s); // Arabic Unicode block
+
+  for (const p of Object.values(store.places)) {
+    const variants = new Set();
+    if (typeof p.type === 'string' && p.type.trim()) variants.add(p.type.trim());
+    if (Array.isArray(p.types)) {
+      for (const t of p.types) {
+        if (typeof t === 'string' && t.trim()) variants.add(t.trim());
+      }
+    }
+    for (const t of variants) {
+      if (lang === 'ar' && !isArabic(t)) continue;
+      if (lang === 'en' && isArabic(t)) continue;
+      counts.set(t, (counts.get(t) ?? 0) + 1);
+      if (withExamples) {
+        const arr = examples.get(t) ?? [];
+        if (arr.length < 3 && p.title) arr.push(p.title);
+        examples.set(t, arr);
+      }
+    }
+  }
+
+  let list = [...counts.entries()].map(([type, count]) => ({
+    type,
+    count,
+    is_arabic: isArabic(type),
+    ...(withExamples ? { examples: examples.get(type) ?? [] } : {}),
+  }));
+  list.sort((a, b) => b.count - a.count || a.type.localeCompare(b.type));
+  if (Number.isFinite(limit) && limit > 0) list = list.slice(0, limit);
+
+  res.json({
+    count: list.length,
+    total_places: Object.keys(store.places).length,
+    types: list,
+  });
+});
+
 // ----- /categories — what's actually in the store, with counts -----
 app.get('/categories', async (_req, res) => {
   const store = await loadStore();
@@ -455,6 +525,7 @@ app.listen(SERVER_PORT, '0.0.0.0', () => {
   console.log(`  GET /reviews?data_id=0x...:0x...&next_page_token=...`);
   console.log(`  GET /photos?data_id=0x...:0x...&next_page_token=...`);
   console.log(`  GET /places?category=coffee&sort=rating`);
+  console.log(`  GET /place-types?lang=en&with_examples=1   (every Google type seen)`);
   console.log(`  GET /img?u=<google-image-url>           (proxies the 429-prone CDN)`);
   console.log(`  flags: &force=1 (bypass cache+store), &hl=ar (language)`);
 });
