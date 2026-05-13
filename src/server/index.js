@@ -17,7 +17,11 @@ import { scrapePhotos } from '../scrapers/photos.js';
 import { getCached, setCached } from './cache.js';
 import { imgProxyHandler } from './img-proxy.js';
 import { CACHE_TTL_MS, SERVER_PORT, API_BASE_URL, rewriteProxyUrls } from '../config.js';
-import { listAllPlaces, uploadOnePlace } from '../pipeline/firestore.js';
+import {
+  listAllPlaces,
+  readPlaceTypesIndex,
+  uploadOnePlace,
+} from '../pipeline/firestore.js';
 
 const STORE_PATH = new URL('../../data/places.json', import.meta.url).pathname;
 const REVIEWS_PER_PAGE = 8;
@@ -292,45 +296,35 @@ function normalizeCategory(raw, available) {
 
 // ----- /place-types — every distinct Google `type` value with counts -----
 //
-// Returns the raw Google Maps category string for every place we know
-// about, grouped by `type` with counts. The Flutter app uses this as a
-// discoverability view — users (and us, when triaging the classifier)
-// can see the long tail of place types in the catalogue at a glance.
+// The mobile app does NOT call this endpoint in production — it reads
+// the snapshot doc at `meta/place_types` directly from Firestore (much
+// faster, no Render hop, no cold-start latency, real-time on updates).
+// This endpoint exists primarily for:
+//   - Manual testing / inspection from a browser or curl
+//   - Backfilling clients that can't reach Firestore
+//   - A backup path if the snapshot doc is ever stale or missing
 //
-// **Source of truth: Firestore.** On Render's ephemeral filesystem the
-// on-disk `places.json` is empty until the cron writes it, but the real
-// catalogue lives in Firestore at all times. We list it once and cache
-// the rolled-up index for `PLACE_TYPES_CACHE_MS`; only the cron job
-// changes the underlying data, so a 5-minute cache is generous.
+// Read strategy:
+//   1. Prefer the pre-computed `meta/place_types` snapshot doc.
+//      Cheap (1 Firestore read), reflects the last cron's output.
+//   2. If `?live=1` is set, OR the snapshot doc is missing, fall back
+//      to a live aggregation over every place doc. Slower (~1 read per
+//      place) but always returns fresh data.
 //
 // Optional query params:
-//   ?lang=en|ar   — filter to only types that look Latin / Arabic
-//   ?limit=N      — cap the response to the top N types (default: no cap)
+//   ?lang=en|ar       — filter to only types that look Latin / Arabic
+//   ?limit=N          — cap the response to the top N types (default: all)
 //   ?with_examples=1  — include up to 3 example place names per type
-//   ?force=1      — bypass the in-process cache and re-list from Firestore
+//   ?live=1           — bypass meta/place_types and aggregate live
 
-const PLACE_TYPES_CACHE_MS = 5 * 60 * 1000;
-let _placeTypesCache = null; // { generatedAt, index: { totalPlaces, perType: Map<string, {count, examples}> }, error? }
+const PLACE_TYPES_LIVE_CACHE_MS = 5 * 60 * 1000;
+let _liveCache = null; // { generatedAt, types[], totalPlaces }
 
-async function buildPlaceTypesIndex() {
-  // Try Firestore first (production / configured). Fall back to the
-  // local store if Firestore isn't reachable — useful for dev work
-  // where someone is iterating on the endpoint without credentials.
-  let places;
-  try {
-    places = await listAllPlaces();
-  } catch (e) {
-    const store = await loadStore();
-    places = Object.values(store.places ?? {});
-    if (places.length === 0) {
-      // Re-throw the Firestore error so the caller can surface it —
-      // an empty local store + Firestore failure means we genuinely
-      // have nothing to return.
-      throw e;
-    }
-  }
+const isArabicScript = (s) => /[؀-ۿ]/.test(s);
 
-  const perType = new Map(); // type → { count, examples }
+async function buildLivePlaceTypesIndex() {
+  const places = await listAllPlaces();
+  const perType = new Map();
   for (const p of places) {
     if (!p) continue;
     const variants = new Set();
@@ -347,26 +341,34 @@ async function buildPlaceTypesIndex() {
         perType.set(t, bucket);
       }
       bucket.count += 1;
-      if (bucket.examples.length < 3 && typeof p.title === 'string') {
+      if (bucket.examples.length < 3 && typeof p.title === 'string' && p.title) {
         bucket.examples.push(p.title);
       }
     }
   }
-  return { totalPlaces: places.length, perType };
+  const types = [...perType.entries()]
+    .map(([type, bucket]) => ({
+      type,
+      count: bucket.count,
+      is_arabic: isArabicScript(type),
+      examples: bucket.examples,
+    }))
+    .sort((a, b) => b.count - a.count || a.type.localeCompare(b.type));
+  return { totalPlaces: places.length, types };
 }
 
-async function getPlaceTypesIndex(force) {
+async function getLivePlaceTypes(force) {
   const now = Date.now();
   if (
     !force &&
-    _placeTypesCache &&
-    now - _placeTypesCache.generatedAt < PLACE_TYPES_CACHE_MS
+    _liveCache &&
+    now - _liveCache.generatedAt < PLACE_TYPES_LIVE_CACHE_MS
   ) {
-    return _placeTypesCache;
+    return _liveCache;
   }
-  const index = await buildPlaceTypesIndex();
-  _placeTypesCache = { generatedAt: now, index };
-  return _placeTypesCache;
+  const idx = await buildLivePlaceTypesIndex();
+  _liveCache = { generatedAt: now, ...idx };
+  return _liveCache;
 }
 
 app.get('/place-types', async (req, res) => {
@@ -375,43 +377,57 @@ app.get('/place-types', async (req, res) => {
       : null;
   const limit = parseInt(req.query.limit, 10);
   const withExamples = req.query.with_examples === '1';
-  const force = req.query.force === '1';
-  // Arabic Unicode block — catches Persian-script characters too, but
-  // for "is this string in an Arabic script" that's the right call.
-  const isArabic = (s) => /[؀-ۿ]/.test(s);
+  const live = req.query.live === '1';
 
-  let cache;
+  let source = 'snapshot';
+  let types;
+  let totalPlaces;
+  let generatedAt;
+
   try {
-    cache = await getPlaceTypesIndex(force);
+    if (!live) {
+      const snap = await readPlaceTypesIndex();
+      if (snap?.types && Array.isArray(snap.types)) {
+        types = snap.types;
+        totalPlaces = snap.total_places ?? 0;
+        generatedAt = snap.generated_at;
+      } else {
+        // Snapshot missing → fall back to live compute. First-time
+        // bootstrap before the cron has ever run.
+        source = 'live-fallback';
+      }
+    }
+    if (!types) {
+      const idx = await getLivePlaceTypes(false);
+      source = live ? 'live' : 'live-fallback';
+      types = idx.types;
+      totalPlaces = idx.totalPlaces;
+      generatedAt = new Date(idx.generatedAt).toISOString();
+    }
   } catch (e) {
     return res.status(503).json({
       error: 'place-types unavailable',
       detail: e.message,
       hint:
-        'The endpoint reads from Firestore; check the server has ' +
-        'FIRESTORE_PROJECT + GOOGLE_APPLICATION_CREDENTIALS configured.',
+        'Endpoint reads from Firestore. Check FIRESTORE_PROJECT and ' +
+        'GOOGLE_APPLICATION_CREDENTIALS are set on the server.',
     });
   }
 
-  const { totalPlaces, perType } = cache.index;
-  let list = [...perType.entries()]
-    .filter(([type]) =>
-      lang === 'ar' ? isArabic(type) : lang === 'en' ? !isArabic(type) : true
-    )
-    .map(([type, bucket]) => ({
-      type,
-      count: bucket.count,
-      is_arabic: isArabic(type),
-      ...(withExamples ? { examples: bucket.examples.slice(0, 3) } : {}),
-    }));
-  list.sort((a, b) => b.count - a.count || a.type.localeCompare(b.type));
+  let list = types.filter((t) =>
+    lang === 'ar' ? t.is_arabic : lang === 'en' ? !t.is_arabic : true
+  );
+  if (!withExamples) {
+    list = list.map(({ examples: _ex, ...rest }) => rest);
+  }
   if (Number.isFinite(limit) && limit > 0) list = list.slice(0, limit);
 
   res.json({
     count: list.length,
     total_places: totalPlaces,
+    source,
+    generated_at: generatedAt,
     types: list,
-    cache_age_ms: Date.now() - cache.generatedAt,
   });
 });
 

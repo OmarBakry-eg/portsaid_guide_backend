@@ -89,6 +89,84 @@ export async function listAllPlaces() {
   return snap.docs.map((d) => d.data());
 }
 
+/// Read the pre-computed `meta/place_types` snapshot doc. Returns the
+/// stored payload (or null if it doesn't exist yet — pre-bootstrap).
+/// One Firestore read regardless of catalogue size; the doc is the
+/// canonical source the mobile app subscribes to.
+export async function readPlaceTypesIndex() {
+  const db = await getFirestore();
+  const snap = await db.collection('meta').doc('place_types').get();
+  return snap.exists ? snap.data() : null;
+}
+
+/// Compute the place-types index from every Firestore place doc and
+/// write it as a single document at `meta/place_types`. Called at the
+/// end of every successful cron sync so the mobile app can subscribe
+/// to `meta/place_types` directly — no Render server hop, no cold-
+/// start latency, real-time updates the next time the cron writes.
+///
+/// Doc shape:
+///   meta/place_types {
+///     generated_at: ISO timestamp string
+///     total_places: int
+///     type_count:   int
+///     types:        Array<{ type, count, is_arabic, examples[<=3] }>
+///   }
+///
+/// We deliberately keep `examples` to 3 per type to stay well under
+/// Firestore's 1 MiB doc limit even if the catalogue grows to 10k+
+/// distinct types.
+export async function writePlaceTypesIndex({ from } = {}) {
+  const places = from ?? (await listAllPlaces());
+
+  const isArabic = (s) => /[؀-ۿ]/.test(s);
+  const perType = new Map(); // type → { count, examples }
+
+  for (const p of places) {
+    if (!p) continue;
+    // Collect every distinct type label this place exposes (primary
+    // `type` + secondary entries in `types[]`).
+    const variants = new Set();
+    if (typeof p.type === 'string' && p.type.trim()) variants.add(p.type.trim());
+    if (Array.isArray(p.types)) {
+      for (const t of p.types) {
+        if (typeof t === 'string' && t.trim()) variants.add(t.trim());
+      }
+    }
+    for (const t of variants) {
+      let bucket = perType.get(t);
+      if (!bucket) {
+        bucket = { count: 0, examples: [] };
+        perType.set(t, bucket);
+      }
+      bucket.count += 1;
+      if (bucket.examples.length < 3 && typeof p.title === 'string' && p.title) {
+        bucket.examples.push(p.title);
+      }
+    }
+  }
+
+  const types = [...perType.entries()]
+    .map(([type, bucket]) => ({
+      type,
+      count: bucket.count,
+      is_arabic: isArabic(type),
+      examples: bucket.examples,
+    }))
+    .sort((a, b) => b.count - a.count || a.type.localeCompare(b.type));
+
+  const doc = {
+    generated_at: new Date().toISOString(),
+    total_places: places.length,
+    type_count: types.length,
+    types,
+  };
+
+  const db = await getFirestore();
+  await db.collection('meta').doc('place_types').set(doc);
+  return doc;
+}
+
 // Upload one place to Firestore. Used by both the bulk sync and the
 // per-place on-demand refresh from the server.
 export async function uploadOnePlace(place) {

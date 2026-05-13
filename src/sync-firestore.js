@@ -1,12 +1,20 @@
-// CLI: push the entire local store to Firestore.
+// CLI: push the entire local store to Firestore, then refresh derived
+// indexes (meta/place_types).
 //
 // Usage:
 //   FIRESTORE_PROJECT=port-said-guide \
 //   GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json \
 //   node src/sync-firestore.js
+//
+// Flags:
+//   --snapshots          also write per-place rating/review snapshots
+//   --skip-index         skip the meta/place_types refresh (debug only)
 
 import { parseArgs } from './util/args.js';
-import { syncStoreToFirestore } from './pipeline/firestore.js';
+import {
+  syncStoreToFirestore,
+  writePlaceTypesIndex,
+} from './pipeline/firestore.js';
 
 const args = parseArgs(process.argv);
 const storePath = args.store || new URL('../data/places.json', import.meta.url).pathname;
@@ -18,6 +26,19 @@ try {
     snapshotHistory: !!args.snapshots,
   });
   console.log(`✓ ${uploaded} places synced to Firestore`);
+
+  // Refresh the derived `meta/place_types` index. The mobile app
+  // subscribes to this doc directly, so it sees the latest types the
+  // moment the cron finishes — no Render hop, no cold-start latency.
+  // Runs after the bulk sync because it lists places from Firestore
+  // (the canonical store post-upload), not from the local file.
+  if (!args['skip-index']) {
+    console.log('◆ refreshing meta/place_types index');
+    const idx = await writePlaceTypesIndex();
+    console.log(
+      `✓ meta/place_types updated — ${idx.type_count} distinct types across ${idx.total_places} places`
+    );
+  }
 } catch (e) {
   console.error('✗ sync failed:', e.message);
   process.exit(2);
