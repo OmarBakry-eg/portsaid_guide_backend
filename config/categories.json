@@ -76,6 +76,7 @@
     { "slug": "auto-repair",    "q": "auto repair",           "cadence_hours": 24, "group": "auto" },
     { "slug": "auto-repair",    "q": "ميكانيكي سيارات",       "hl": "ar", "cadence_hours": 24, "group": "auto" },
     { "slug": "car-rental",     "q": "car rental",            "cadence_hours": 48, "group": "auto" },
+    { "slug": "car-rental",     "q": "تأجير سيارات",          "hl": "ar", "cadence_hours": 48, "group": "auto" },
     { "slug": "parking",        "q": "parking",               "cadence_hours": 48, "group": "auto" },
 
     { "slug": "mosque",         "q": "mosque",                "cadence_hours": 168, "group": "religion" },
