@@ -92,7 +92,11 @@ export async function runOrchestrator({
         ll: job.anchor.ll,
         hl: job.category.hl || 'en',
       });
-      const stats = applyScrape(store, result, {
+      // applyScrape is async — it awaits the classifier (Groq LLM)
+      // when a place's identity signature has changed. Without the
+      // await here, `stats` is the unresolved Promise and every log /
+      // run-log entry shows `undefined found (+undefined new, …)`.
+      const stats = await applyScrape(store, result, {
         scrapeRunId: runId,
         category: job.category.slug,
         anchorId: job.anchor.id,
