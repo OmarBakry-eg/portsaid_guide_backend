@@ -19,9 +19,12 @@ import { imgProxyHandler } from './img-proxy.js';
 import { CACHE_TTL_MS, SERVER_PORT, API_BASE_URL, rewriteProxyUrls } from '../config.js';
 import {
   listAllPlaces,
+  readCatalogueBuckets,
+  readCatalogueIndex,
   readPlaceTypesIndex,
   uploadOnePlace,
 } from '../pipeline/firestore.js';
+import { buildCatalogue } from '../catalogue/bucket.js';
 
 const STORE_PATH = new URL('../../data/places.json', import.meta.url).pathname;
 const REVIEWS_PER_PAGE = 8;
@@ -579,6 +582,143 @@ app.post('/refresh', async (req, res) => {
   })();
 });
 
+// ----- /catalogue — bucketed catalogue tree (test / inspection) -----
+//
+// **The mobile app does NOT call this endpoint.** Mobile reads the
+// `catalogue_buckets/*` collection + `catalogue_meta/index` doc
+// directly from Firestore — that's the architecture: Render's cold
+// start is too slow to sit in the home-screen critical path, and
+// Firestore streams are real-time + offline-cached for free.
+//
+// This endpoint exists so you can:
+//   - Inspect what the cron is going to write, before it does
+//     (`?live=1` — runs the build in-process against the live
+//     `places/` collection without touching `catalogue_buckets/*`)
+//   - Verify the snapshot the mobile is reading from
+//     (default — assembles a tree from `catalogue_buckets/*`)
+//   - Backfill clients that can't reach Firestore
+//
+// Query params:
+//   ?main=<slug>      filter response to one main category
+//   ?include_places=1 include the full place arrays (default: counts only)
+//   ?live=1           skip Firestore reads, rebuild from `places/`
+const PLACES_CACHE_MS = 5 * 60 * 1000;
+let _liveCatalogueCache = null;
+
+app.get('/catalogue', async (req, res) => {
+  const mainFilter = typeof req.query.main === 'string' ? req.query.main : null;
+  const includePlaces = req.query.include_places === '1';
+  const live = req.query.live === '1';
+
+  try {
+    let generatedAt;
+    let totalPlaces;
+    let mains; // { mainSlug: { place_count, subs: { subSlug: { label, raw_type, place_count, places[] } } } }
+    let source;
+
+    if (live) {
+      // Rebuild from `places/`. Cached briefly so back-to-back hits
+      // during testing don't hammer Firestore.
+      const now = Date.now();
+      if (
+        _liveCatalogueCache &&
+        now - _liveCatalogueCache.generatedAt < PLACES_CACHE_MS
+      ) {
+        const cached = _liveCatalogueCache.catalogue;
+        generatedAt = cached.generated_at;
+        totalPlaces = cached.total_places;
+        mains = cached.mains;
+      } else {
+        const places = await listAllPlaces();
+        const catalogue = buildCatalogue(places);
+        _liveCatalogueCache = { generatedAt: now, catalogue };
+        generatedAt = catalogue.generated_at;
+        totalPlaces = catalogue.total_places;
+        mains = catalogue.mains;
+      }
+      source = 'live';
+    } else {
+      const index = await readCatalogueIndex();
+      if (!index) {
+        return res.status(503).json({
+          error: 'catalogue not bootstrapped',
+          hint: 'No `catalogue_meta/index` doc found yet. Run ' +
+              '`npm run sync-firestore` to produce one, or call ' +
+              '`/catalogue?live=1` to build inline.',
+        });
+      }
+      generatedAt = index.generated_at;
+      totalPlaces = index.total_places;
+      // Assemble the tree by reading the bucket docs back. Cheap —
+      // ~65 docs, all small. If the caller asked for counts-only we
+      // skip the bucket read entirely.
+      if (includePlaces) {
+        const buckets = await readCatalogueBuckets();
+        mains = {};
+        for (const [mainSlug, summary] of Object.entries(index.mains)) {
+          mains[mainSlug] = {
+            place_count: summary.place_count,
+            subs: {},
+          };
+          for (const subSummary of summary.subs) {
+            const bucket = buckets.find(
+                (b) => b.main === mainSlug && b.sub === subSummary.sub);
+            mains[mainSlug].subs[subSummary.sub] = {
+              label: subSummary.label,
+              raw_type: subSummary.raw_type,
+              place_count: subSummary.place_count,
+              places: bucket?.places ?? [],
+            };
+          }
+        }
+      } else {
+        // Counts-only: reuse the index summary directly.
+        mains = {};
+        for (const [mainSlug, summary] of Object.entries(index.mains)) {
+          mains[mainSlug] = {
+            place_count: summary.place_count,
+            subs: Object.fromEntries(
+              summary.subs.map((s) => [s.sub, {
+                label: s.label,
+                raw_type: s.raw_type,
+                place_count: s.place_count,
+              }]),
+            ),
+          };
+        }
+      }
+      source = 'snapshot';
+    }
+
+    // Optional main filter — return one main's subtree only.
+    let filteredMains = mains;
+    if (mainFilter != null) {
+      if (!mains[mainFilter]) {
+        return res.status(404).json({
+          error: `unknown main category "${mainFilter}"`,
+          known_mains: Object.keys(mains),
+        });
+      }
+      filteredMains = { [mainFilter]: mains[mainFilter] };
+    }
+
+    res.json({
+      source,
+      generated_at: generatedAt,
+      total_places: totalPlaces,
+      include_places: includePlaces,
+      mains: filteredMains,
+    });
+  } catch (e) {
+    res.status(503).json({
+      error: 'catalogue unavailable',
+      detail: e.message,
+      hint: 'The endpoint reads from Firestore; check the server has ' +
+          'FIRESTORE_PROJECT + GOOGLE_APPLICATION_CREDENTIALS set.',
+    });
+  }
+});
+
 app.get('/healthz', async (_req, res) => {
   const store = await loadStore();
   res.json({
@@ -597,6 +737,7 @@ app.listen(SERVER_PORT, '0.0.0.0', () => {
   console.log(`  GET /photos?data_id=0x...:0x...&next_page_token=...`);
   console.log(`  GET /places?category=coffee&sort=rating`);
   console.log(`  GET /place-types?lang=en&with_examples=1   (every Google type seen)`);
+  console.log(`  GET /catalogue?include_places=1            (bucketed catalogue tree)`);
   console.log(`  GET /img?u=<google-image-url>           (proxies the 429-prone CDN)`);
   console.log(`  flags: &force=1 (bypass cache+store), &hl=ar (language)`);
 });

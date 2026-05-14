@@ -89,6 +89,106 @@ export async function listAllPlaces() {
   return snap.docs.map((d) => d.data());
 }
 
+/// Bucketed catalogue write — fan-out of the canonical "browse view".
+///
+/// Persistence layout:
+///   - `catalogue_buckets/{main}__{sub}` — one doc per (main, sub)
+///     containing the compact place list + metadata. Typical doc is
+///     25–150 KB; the largest theoretical bucket (Shopping >
+///     supermarket) is well under Firestore's 1 MiB limit.
+///   - `catalogue_meta/index` — small summary doc with counts +
+///     labels per main+sub. Mobile reads this for the home grid; the
+///     bucket docs are streamed for the actual browse surfaces.
+///
+/// We write the buckets in batches of up to 400 docs each (Firestore
+/// commit limit is 500; 400 leaves headroom for the meta write).
+/// Every existing `catalogue_buckets/*` doc is deleted first so stale
+/// buckets from a previous run don't leak in — e.g. if Other's top-20
+/// types shift between runs, the old `type_*` docs would otherwise
+/// linger forever.
+export async function writeCatalogue(catalogue) {
+  const db = await getFirestore();
+
+  // Build the docs to write. Bucket doc IDs use double-underscore to
+  // join main + sub, e.g. `food__coffee`, `other__type_beauty_salon`.
+  const bucketDocs = [];
+  for (const [mainSlug, main] of Object.entries(catalogue.mains)) {
+    for (const [subSlug, sub] of Object.entries(main.subs)) {
+      bucketDocs.push({
+        id: `${mainSlug}__${subSlug}`,
+        data: {
+          main: mainSlug,
+          sub: subSlug,
+          label: sub.label,
+          raw_type: sub.raw_type ?? null,
+          place_count: sub.place_count,
+          places: sub.places,
+          generated_at: catalogue.generated_at,
+        },
+      });
+    }
+  }
+
+  // Wipe-then-write rather than diff-merge. Catalogue is small (~65
+  // docs), regenerated entirely per cron run, and the cost of a stale
+  // bucket lingering is real (the user sees ghost categories). A full
+  // overwrite is the simpler, safer contract.
+  const existing = await db.collection('catalogue_buckets').get();
+  const COMMIT_LIMIT = 400;
+
+  // Delete old docs in batches.
+  for (let i = 0; i < existing.docs.length; i += COMMIT_LIMIT) {
+    const batch = db.batch();
+    const slice = existing.docs.slice(i, i + COMMIT_LIMIT);
+    for (const doc of slice) batch.delete(doc.ref);
+    await batch.commit();
+  }
+
+  // Write new bucket docs.
+  for (let i = 0; i < bucketDocs.length; i += COMMIT_LIMIT) {
+    const batch = db.batch();
+    const slice = bucketDocs.slice(i, i + COMMIT_LIMIT);
+    for (const { id, data } of slice) {
+      batch.set(db.collection('catalogue_buckets').doc(id), data);
+    }
+    await batch.commit();
+  }
+
+  // Write the summary index doc last so any reader that races the
+  // build sees a self-consistent view: either the OLD index pointing
+  // to the OLD buckets (we cleared them; mobile gets empty until the
+  // index updates) or the NEW index pointing to the NEW buckets.
+  const indexDoc = (await import('../catalogue/bucket.js')).buildCatalogueIndex(
+      catalogue);
+  await db.collection('catalogue_meta').doc('index').set(indexDoc);
+
+  return {
+    bucket_count: bucketDocs.length,
+    total_places: catalogue.total_places,
+    main_count: Object.keys(catalogue.mains).length,
+  };
+}
+
+/// Read the `catalogue_meta/index` summary doc back. Returns null if
+/// the catalogue hasn't been bootstrapped yet. Cheap (1 Firestore
+/// read), used by the HTTP test endpoint and any caller that just
+/// wants the structure without the full place lists.
+export async function readCatalogueIndex() {
+  const db = await getFirestore();
+  const snap = await db.collection('catalogue_meta').doc('index').get();
+  return snap.exists ? snap.data() : null;
+}
+
+/// Read every bucket doc back as an array. Used by the HTTP test
+/// endpoint to assemble a full tree response — the mobile app reads
+/// these via a Firestore snapshots() stream and groups client-side,
+/// so this isn't on the mobile's read path.
+export async function readCatalogueBuckets() {
+  const db = await getFirestore();
+  const snap = await db.collection('catalogue_buckets').get();
+  return snap.docs.map((d) => d.data());
+}
+
 /// Read the pre-computed `meta/place_types` snapshot doc. Returns the
 /// stored payload (or null if it doesn't exist yet — pre-bootstrap).
 /// One Firestore read regardless of catalogue size; the doc is the

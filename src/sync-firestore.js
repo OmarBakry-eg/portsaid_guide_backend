@@ -11,8 +11,11 @@
 //   --skip-index         skip the meta/place_types refresh (debug only)
 
 import { parseArgs } from './util/args.js';
+import { buildCatalogue } from './catalogue/bucket.js';
 import {
+  listAllPlaces,
   syncStoreToFirestore,
+  writeCatalogue,
   writePlaceTypesIndex,
 } from './pipeline/firestore.js';
 
@@ -37,6 +40,22 @@ try {
     const idx = await writePlaceTypesIndex();
     console.log(
       `✓ meta/place_types updated — ${idx.type_count} distinct types across ${idx.total_places} places`
+    );
+  }
+
+  // Build + write the bucketed catalogue (`catalogue_buckets/*` +
+  // `catalogue_meta/index`). Mobile's home / category / list views
+  // read from this; the heavy `places/*` collection becomes a
+  // detail-page-only concern. Same flag gates this as the
+  // place_types refresh so a debug `--skip-index` run skips both.
+  if (!args['skip-index']) {
+    console.log('◆ refreshing catalogue (buckets + meta/index)');
+    const places = await listAllPlaces();
+    const catalogue = buildCatalogue(places);
+    const result = await writeCatalogue(catalogue);
+    console.log(
+      `✓ catalogue updated — ${result.bucket_count} buckets across ` +
+        `${result.main_count} mains, ${result.total_places} places`
     );
   }
 } catch (e) {
