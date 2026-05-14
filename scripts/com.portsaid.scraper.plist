@@ -40,7 +40,7 @@
       We restrict to two anchors here so a single run stays ≤ ~30 min;
       adjust if you want full multi-anchor coverage at the cost of duration.
     -->
-    <string>cd /Users/omarbakry/Desktop/developer/portsaid_guide/scraper &amp;&amp; /usr/local/bin/node src/run-all.js --anchors=wide-city,city-center --only=restaurant,coffee,pharmacy,hospital,hotel,supermarket,gas-station,bank,mosque,beach &amp;&amp; /usr/local/bin/node src/sync-firestore.js</string>
+    <string>cd /Users/omarbakry/Desktop/developer/portsaid_guide/scraper &amp;&amp; /usr/local/bin/node src/run-all.js --anchors=wide-city,city-center --only=restaurant,coffee,pharmacy,hospital,hotel,supermarket,gas-station,bank,mosque,beach,gym,cinema &amp;&amp; /usr/local/bin/node src/sync-firestore.js</string>
   </array>
 
   <!--

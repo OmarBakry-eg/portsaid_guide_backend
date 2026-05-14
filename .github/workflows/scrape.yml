@@ -137,10 +137,12 @@ jobs:
             # shopping families the catalogue used to be missing —
             # clothing by demographic, the specialty stores (candy /
             # gift / toys / books / florist / jewelry / stationery)
-            # and shoe stores. `--force` is set below so cadence_hours
-            # on each entry is ignored for the cron — every category
-            # listed here runs on every scheduled run.
-            ONLY="restaurant,coffee,pharmacy,hospital,hotel,supermarket,gas-station,bank,mosque,beach,clothing-men,clothing-women,clothing-kids,shoe-store,candy-store,gift-shop,toy-store,bookstore,florist,jewelry,stationery"
+            # and shoe stores. Leisure adds gym + cinema so the
+            # Outdoors & Leisure main isn't empty in the app.
+            # `--force` is set below so cadence_hours on each entry is
+            # ignored for the cron — every category listed here runs on
+            # every scheduled run.
+            ONLY="restaurant,coffee,pharmacy,hospital,hotel,supermarket,gas-station,bank,mosque,beach,clothing-men,clothing-women,clothing-kids,shoe-store,candy-store,gift-shop,toy-store,bookstore,florist,jewelry,stationery,gym,cinema"
           fi
           if [ -z "$ANCHORS" ]; then
             ANCHORS="wide-city,city-center"

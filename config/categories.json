@@ -86,7 +86,12 @@
     { "slug": "beach",          "q": "beach",                 "cadence_hours": 48, "group": "entertainment" },
     { "slug": "park",           "q": "park",                  "cadence_hours": 48, "group": "entertainment" },
     { "slug": "cinema",         "q": "cinema",                "cadence_hours": 24, "group": "entertainment" },
+    { "slug": "cinema",         "q": "movie theater",         "cadence_hours": 24, "group": "entertainment" },
+    { "slug": "cinema",         "q": "سينما",                 "hl": "ar", "cadence_hours": 24, "group": "entertainment" },
     { "slug": "gym",            "q": "gym",                   "cadence_hours": 24, "group": "entertainment" },
+    { "slug": "gym",            "q": "fitness center",        "cadence_hours": 24, "group": "entertainment" },
+    { "slug": "gym",            "q": "جيم",                   "hl": "ar", "cadence_hours": 24, "group": "entertainment" },
+    { "slug": "gym",            "q": "نادي رياضي",            "hl": "ar", "cadence_hours": 24, "group": "entertainment" },
     { "slug": "tourist-attr",   "q": "tourist attraction",    "cadence_hours": 48, "group": "entertainment" },
 
     { "slug": "school",         "q": "school",                "cadence_hours": 168, "group": "education" },
