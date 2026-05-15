@@ -281,12 +281,18 @@ export async function uploadOnePlace(place) {
 
 // Bulk sync: push every place from places.json. Uses batched writes (500/batch
 // is Firestore's max). Optionally writes snapshot history.
+//
+// Returns both the uploaded count AND the in-memory places array. Callers
+// (sync-firestore.js) can pass that array straight into downstream steps
+// (writePlaceTypesIndex, buildCatalogue) instead of re-reading every doc
+// back from Firestore — which would burn ~3,600 reads against the free
+// tier's 50,000/day quota on each subsequent step.
 export async function syncStoreToFirestore(storePath, { snapshotHistory = false } = {}) {
   const store = JSON.parse(await readFile(storePath, 'utf8'));
   const places = Object.values(store.places ?? {});
   if (!places.length) {
     console.log('No places in store. Nothing to sync.');
-    return { uploaded: 0 };
+    return { uploaded: 0, places };
   }
 
   const db = await getFirestore();
@@ -322,5 +328,5 @@ export async function syncStoreToFirestore(storePath, { snapshotHistory = false 
     );
   }
   process.stdout.write('\n');
-  return { uploaded };
+  return { uploaded, places };
 }
