@@ -85,17 +85,41 @@ function pickKey() {
 function buildMessages({ place, queriedSlug }) {
   const system = `You are classifying business listings from Google Maps for a Port Said city guide app.
 
+CRITICAL: BE STRICT. The downstream code DROPS the queried slug from a place's categories whenever you return "unrelated" or "feature_only". A wrong "loose" verdict puts a clinic in the Cinemas tab. When in doubt about fit, choose "unrelated" — the place will still surface under its true primary_slug, just not in the wrong tab.
+
 Decision rules — apply in order:
 
 1. PREFER the place's NAME and REVIEW TEXT over Google's type field. Google's type is often missing or generic ("Establishment"). A place named "<X> Café" is a coffee shop regardless of how Google typed it.
-2. Pick a SINGLE primary_slug from the allowed list. Use "other" ONLY when no curated slug fits at all — not as a default.
+
+2. Pick a SINGLE primary_slug from the allowed list. Use "other" ONLY when no curated slug fits at all — not as a default for ambiguity.
+
 3. For fit_for_queried_slug, answer how this place relates to the slug we scraped it under ("${queriedSlug ?? 'none'}"):
-   - "strong": really IS a ${queriedSlug ?? 'X'}
-   - "loose": adjacent / related, fine to keep
-   - "feature_only": NOT a ${queriedSlug ?? 'X'} but CONTAINS a ${queriedSlug ?? 'X'} feature (mark the feature in attributes)
-   - "unrelated": no connection
-4. Set attribute booleans truthfully. has_atm = "this place has an ATM somewhere on premises". Don't set has_atm true on places that ARE banks/ATMs — that's redundant.
-5. Confidence: 0.9+ for unambiguous, 0.6-0.8 for "probably right", below 0.5 for "guess".
+   - "strong": the place's identity IS ${queriedSlug ?? 'X'} (matches primary_slug).
+   - "loose": same family — fast-food under a "restaurant" query, hostel under a "hotel" query, clinic under "hospital", grocery under "supermarket". Use ONLY for the documented family pairs below.
+   - "feature_only": NOT a ${queriedSlug ?? 'X'} but contains it as a feature (e.g. supermarket with an in-store ATM, queried under "bank"). Set the relevant attribute boolean.
+   - "unrelated": no real connection. Use this when in doubt.
+
+   Examples that MUST be "unrelated":
+   - clinic / pharmacy / supermarket / fast-food queried under "cinema" → unrelated. A mall containing a cinema is still unrelated when queried under "cinema" if the place's identity is "mall". Only a real movie theater is "strong" for cinema.
+   - park / playground queried under "gym" → unrelated.
+   - electronics store queried under "mall" → unrelated.
+   - money-exchange queried under "bank" → unrelated (different service).
+   - any restaurant / shop / school queried under "tourist-attr" → unrelated unless it actually IS a landmark.
+
+   Family pairs that may be "loose":
+   - bank ↔ atm
+   - restaurant ↔ fast-food ↔ fish-seafood
+   - coffee ↔ bakery ↔ dessert ↔ candy-store
+   - hospital ↔ clinic ↔ dentist
+   - supermarket ↔ grocery
+   - clothing ↔ clothing-men/women/kids ↔ shoe-store
+   - hotel ↔ hostel
+   - park ↔ beach
+   - school ↔ university ↔ library
+
+4. Set attribute booleans truthfully. has_atm = "this place has an ATM somewhere on premises". Don't set has_atm true on places that ARE banks/ATMs — that's redundant (the code strips it for you).
+
+5. Confidence: 0.9+ for unambiguous, 0.6-0.8 for "probably right", below 0.5 for "guess". Confidence applies to primary_slug, not to fit_for_queried_slug.
 
 Allowed primary_slug values:
 ${KNOWN_SLUGS.join(', ')}
