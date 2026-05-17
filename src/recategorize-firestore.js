@@ -17,7 +17,18 @@
 // Both modes are idempotent. Re-running --dry-run produces a new plan;
 // --apply only writes the deltas the plan describes.
 //
-// Cost: full migration of ~1,600 docs hits the LLM for the ~20-30% the
+// The plan covers THREE kinds of action:
+//   1. CATEGORIZATION CHANGES — places whose source_categories /
+//      attributes need updating under the current classifier rules.
+//   2. DELETIONS — places that no longer pass isAccepted under the
+//      current rules (typically the strict geo-fence: places without
+//      coordinates or outside the Port Said bbox, which were the
+//      cross-region pollution vector).
+//   3. INDEX REBUILD — after any moves/deletions, `--apply`
+//      regenerates catalogue_buckets + catalogue_meta/index +
+//      meta/place_types so the mobile app sees the cleaned state.
+//
+// Cost: full migration of ~3,600 docs hits the LLM for the ~20-30% the
 // rules+heuristics can't classify alone. At Groq free-tier prices that's
 // ~$0 per migration. Steady-state cron runs only re-classify changed
 // places (signature-cached on the doc), so the LLM is essentially never
@@ -27,6 +38,13 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 
 import { classify } from './classifier/index.js';
+import { isAccepted } from './parsers/scoring.js';
+import { buildCatalogue } from './catalogue/bucket.js';
+import {
+  listAllPlaces,
+  writeCatalogue,
+  writePlaceTypesIndex,
+} from './pipeline/firestore.js';
 
 const args = process.argv.slice(2);
 const DRY = args.includes('--dry-run');
@@ -84,9 +102,11 @@ async function runDryRun() {
       category_corrected: 0,
       attribute_added: 0,
       moved_to_other: 0,
+      invalid_geo_or_quality: 0,
       classifier_method: { rules: 0, heuristics: 0, llm: 0, fallback: 0 },
     },
     moves: [],
+    deletions: [],
   };
 
   let i = 0;
@@ -94,10 +114,27 @@ async function runDryRun() {
     i += 1;
     const data = doc.data();
 
+    // Strict geo-fence + quality check. Places without coordinates,
+    // outside the Port Said bbox, or with quality_score < threshold
+    // get marked for deletion rather than reclassification.
+    if (!isAccepted(data)) {
+      plan.summary.invalid_geo_or_quality += 1;
+      plan.deletions.push({
+        place_id: doc.id,
+        title: data.title ?? '(no name)',
+        type: data.type ?? null,
+        coords: data.gps_coordinates ?? null,
+        reason: deletionReason(data),
+      });
+      continue;
+    }
+
     // Reclassify regardless of cache — this is a full re-audit. The
     // queried slug is "unknown" here; we don't have the original query
     // context for already-stored docs. The classifier handles that by
-    // not adding a queried slug to source_categories.
+    // not adding a queried slug to source_categories — so the place
+    // surfaces only under its true primary_slug, exactly the strict
+    // membership behavior we want for the cleanup.
     let cls;
     try {
       cls = await classify(data, /* queriedSlug = */ null);
@@ -156,7 +193,8 @@ async function runDryRun() {
         `\r  ${i}/${snap.size}  ` +
           `[unchanged ${plan.summary.unchanged}, ` +
           `corrected ${plan.summary.category_corrected}, ` +
-          `→other ${plan.summary.moved_to_other}]  ` +
+          `→other ${plan.summary.moved_to_other}, ` +
+          `delete ${plan.summary.invalid_geo_or_quality}]  ` +
           `(${((Date.now() - t0) / 1000).toFixed(0)}s)`
       );
     }
@@ -171,7 +209,8 @@ async function runDryRun() {
     `  unchanged ${plan.summary.unchanged}, ` +
       `corrected ${plan.summary.category_corrected}, ` +
       `attr-added ${plan.summary.attribute_added}, ` +
-      `→other ${plan.summary.moved_to_other}`
+      `→other ${plan.summary.moved_to_other}, ` +
+      `delete ${plan.summary.invalid_geo_or_quality}`
   );
   console.log(
     `  classifier method: rules ${plan.summary.classifier_method.rules}, ` +
@@ -200,24 +239,28 @@ async function runApply() {
     process.exit(3);
   }
 
+  const deletions = plan.deletions ?? [];
   console.log(
-    `◆ applying ${plan.moves.length} moves from ${plan.generated_at} ` +
-      `(${(ageMs / 60_000).toFixed(0)} min old)`
+    `◆ applying ${plan.moves.length} moves + ${deletions.length} deletions ` +
+      `from plan generated ${(ageMs / 60_000).toFixed(0)} min ago`
   );
 
   let batch = db.batch();
   let inBatch = 0;
-  let written = 0;
+  let writtenMoves = 0;
+  let writtenDeletes = 0;
   const BATCH_LIMIT = 400;
 
-  async function flush() {
+  async function flush(kind) {
     if (inBatch === 0) return;
     await batch.commit();
-    written += inBatch;
+    if (kind === 'moves') writtenMoves += inBatch;
+    else if (kind === 'deletes') writtenDeletes += inBatch;
     batch = db.batch();
     inBatch = 0;
   }
 
+  // Phase 1: category updates.
   for (const move of plan.moves) {
     const ref = db.collection('places').doc(move.place_id);
     batch.update(ref, {
@@ -234,13 +277,54 @@ async function runApply() {
     });
     inBatch += 1;
     if (inBatch >= BATCH_LIMIT) {
-      await flush();
-      process.stdout.write(`\r  ${written}/${plan.moves.length}`);
+      await flush('moves');
+      process.stdout.write(`\r  moves ${writtenMoves}/${plan.moves.length}`);
     }
   }
-  await flush();
-  process.stdout.write('\n');
-  console.log(`✓ applied ${written} updates`);
+  await flush('moves');
+  process.stdout.write(`\r  moves ${writtenMoves}/${plan.moves.length}\n`);
+
+  // Phase 2: deletions. Each delete is one write op against quota,
+  // but typically the deletion count is small (geo-fence violators).
+  for (const del of deletions) {
+    const ref = db.collection('places').doc(del.place_id);
+    batch.delete(ref);
+    inBatch += 1;
+    if (inBatch >= BATCH_LIMIT) {
+      await flush('deletes');
+      process.stdout.write(`\r  deletes ${writtenDeletes}/${deletions.length}`);
+    }
+  }
+  await flush('deletes');
+  process.stdout.write(`\r  deletes ${writtenDeletes}/${deletions.length}\n`);
+
+  console.log(`✓ applied ${writtenMoves} updates + ${writtenDeletes} deletions`);
+
+  // Phase 3: rebuild the derived indexes from the cleaned Firestore
+  // state. Skips if no actual changes happened (saves quota when the
+  // dry-run plan was empty / no-op).
+  if (writtenMoves === 0 && writtenDeletes === 0) {
+    console.log('◆ no changes — skipping index rebuild');
+    return;
+  }
+
+  console.log('◆ rebuilding meta/place_types index from cleaned state');
+  // One listAllPlaces() here is necessary — we need the post-change
+  // state, and the script doesn't have an in-memory copy. ~3,600 reads
+  // is a one-shot cost we accept for a manual cleanup.
+  const fresh = await listAllPlaces();
+  const idx = await writePlaceTypesIndex({ from: fresh });
+  console.log(
+    `✓ meta/place_types updated — ${idx.type_count} distinct types across ${idx.total_places} places`
+  );
+
+  console.log('◆ rebuilding catalogue (buckets + meta/index)');
+  const catalogue = buildCatalogue(fresh);
+  const result = await writeCatalogue(catalogue);
+  console.log(
+    `✓ catalogue updated — ${result.bucket_count} buckets across ` +
+      `${result.main_count} mains, ${result.total_places} places`
+  );
 }
 
 // ── helpers ─────────────────────────────────────────────────────────
@@ -259,4 +343,23 @@ function attrsEqual(a, b) {
     if ((a?.[k] === true) !== (b?.[k] === true)) return false;
   }
   return true;
+}
+
+/// Best-guess human-readable explanation of why isAccepted rejected a
+/// place. Used for the deletion plan so the user can spot-check before
+/// running --apply.
+function deletionReason(place) {
+  if (!place || typeof place.title !== 'string' || !place.title.trim()) {
+    return 'missing or empty title';
+  }
+  const lat = place.gps_coordinates?.latitude;
+  const lon = place.gps_coordinates?.longitude;
+  if (typeof lat !== 'number' || typeof lon !== 'number') {
+    return 'no coordinates (unverifiable location)';
+  }
+  // Hardcoded bbox — keep in sync with PORT_SAID_BOUNDS in scoring.js.
+  if (lat < 31.10 || lat > 31.35 || lon < 32.20 || lon > 32.40) {
+    return `outside Port Said bbox (lat=${lat}, lon=${lon})`;
+  }
+  return 'quality_score below threshold';
 }
