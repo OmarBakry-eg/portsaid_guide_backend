@@ -211,8 +211,23 @@ export function computeSourceCategories({ primary, fit, queriedSlug, confidence 
 /// Stable signature for cache invalidation. If a place's identifying
 /// signal changes (name, type, types[], extensions, address) we want to
 /// re-classify; otherwise the previous decision is still valid.
+///
+/// The `v` field is a classifier-rules version tag — bump it whenever
+/// LOOSE_NEIGHBORS, the LLM prompt, or computeSourceCategories changes
+/// in a way that should retroactively re-classify already-stored
+/// places. Stored signatures from older `v` values will never match
+/// the current one, forcing one round of re-classification across
+/// every place the cron sees.
+///
+/// v history:
+///   1 — initial schema (implicit, signatures didn't carry a version)
+///   2 — strict membership: drop unrelated/feature_only from
+///       source_categories regardless of confidence; pruned
+///       LOOSE_NEIGHBORS; rewritten LLM prompt; ATTRIBUTE_SURFACING
+///       removed. Bumped 2026-05.
 export function computeSignature(place) {
   const payload = JSON.stringify({
+    v: 2,
     title: place.title || '',
     type: place.type || '',
     types: Array.isArray(place.types) ? place.types : [],

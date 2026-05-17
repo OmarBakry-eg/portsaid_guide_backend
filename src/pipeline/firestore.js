@@ -289,20 +289,53 @@ export async function uploadOnePlace(place) {
   return { uploaded: 1 };
 }
 
-// Bulk sync: push every place from places.json. Uses batched writes (500/batch
-// is Firestore's max). Optionally writes snapshot history.
+// Bulk sync: push places from places.json to Firestore. Uses batched writes
+// (500/batch is Firestore's max). Optionally writes snapshot history.
 //
-// Returns both the uploaded count AND the in-memory places array. Callers
-// (sync-firestore.js) can pass that array straight into downstream steps
-// (writePlaceTypesIndex, buildCatalogue) instead of re-reading every doc
-// back from Firestore — which would burn ~3,600 reads against the free
-// tier's 50,000/day quota on each subsequent step.
-export async function syncStoreToFirestore(storePath, { snapshotHistory = false } = {}) {
+// touchedRunId: when provided, only places whose `last_scrape_run_id`
+//   matches are written. This is the cron's normal mode — the just-
+//   completed scrape touched a subset of places (those returned by
+//   the `--only=` queries); writing only those preserves any
+//   independent Firestore state (e.g. a recategorize-firestore.js
+//   backfill that cleaned places not in the cron's rotation) for
+//   places the cron didn't see this run.
+//
+// touchedRunId = null performs a FULL sync — every place in the
+// store is written. Use this for bootstrap loads or after a
+// major data migration where you want every doc rewritten.
+//
+// Returns the uploaded count AND the FULL in-memory places array
+// (not just the filtered subset). Downstream steps like the
+// catalogue rebuild use the full array so the catalogue mirrors
+// the local store's complete view, not just this run's delta.
+export async function syncStoreToFirestore(
+  storePath,
+  { snapshotHistory = false, touchedRunId = null } = {}
+) {
   const store = JSON.parse(await readFile(storePath, 'utf8'));
-  const places = Object.values(store.places ?? {});
-  if (!places.length) {
+  const allPlaces = Object.values(store.places ?? {});
+  if (!allPlaces.length) {
     console.log('No places in store. Nothing to sync.');
-    return { uploaded: 0, places };
+    return { uploaded: 0, places: allPlaces };
+  }
+
+  // Filter the WRITE set to places touched this run when a runId is
+  // pinned. The full array still flows downstream for catalogue
+  // building — the catalogue reflects total state, not just deltas.
+  const writeSet = touchedRunId
+    ? allPlaces.filter((p) => p?.last_scrape_run_id === touchedRunId)
+    : allPlaces;
+
+  if (touchedRunId) {
+    console.log(
+      `  filtered ${writeSet.length}/${allPlaces.length} places ` +
+        `(only those with last_scrape_run_id = ${touchedRunId})`
+    );
+  }
+
+  if (writeSet.length === 0) {
+    console.log('  nothing to write — every place was untouched this run.');
+    return { uploaded: 0, places: allPlaces };
   }
 
   const db = await getFirestore();
@@ -310,9 +343,9 @@ export async function syncStoreToFirestore(storePath, { snapshotHistory = false 
   let uploaded = 0;
   const t0 = Date.now();
 
-  for (let i = 0; i < places.length; i += BATCH) {
+  for (let i = 0; i < writeSet.length; i += BATCH) {
     const batch = db.batch();
-    const chunk = places.slice(i, i + BATCH);
+    const chunk = writeSet.slice(i, i + BATCH);
     for (const place of chunk) {
       if (!place.place_id) continue;
       const ref = db.collection('places').doc(place.place_id);
@@ -334,9 +367,9 @@ export async function syncStoreToFirestore(storePath, { snapshotHistory = false 
     await batch.commit();
     uploaded += chunk.length;
     process.stdout.write(
-      `\r  ${uploaded}/${places.length}  (${((Date.now() - t0) / 1000).toFixed(1)}s)`
+      `\r  ${uploaded}/${writeSet.length}  (${((Date.now() - t0) / 1000).toFixed(1)}s)`
     );
   }
   process.stdout.write('\n');
-  return { uploaded, places };
+  return { uploaded, places: allPlaces };
 }
