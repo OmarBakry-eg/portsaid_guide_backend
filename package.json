@@ -5,15 +5,16 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "scrape": "node src/index.js",
-    "test:coffee": "node src/index.js --q=coffee --ll=@31.2653,32.3019,15.1z --out=output/coffee.json",
-    "server": "node src/server/index.js",
-    "all": "node src/run-all.js",
-    "sync-firestore": "node src/sync-firestore.js",
-    "scrub-firestore": "node src/scrub-firestore.js",
-    "rescore-firestore": "node src/rescore-firestore.js",
-    "recategorize:dry-run": "node src/recategorize-firestore.js --dry-run",
-    "recategorize:apply": "node src/recategorize-firestore.js --apply"
+    "scrape": "node --env-file-if-exists=secrets/groq.env src/index.js",
+    "test:coffee": "node --env-file-if-exists=secrets/groq.env src/index.js --q=coffee --ll=@31.2653,32.3019,15.1z --out=output/coffee.json",
+    "server": "node --env-file-if-exists=secrets/groq.env src/server/index.js",
+    "all": "node --env-file-if-exists=secrets/groq.env src/run-all.js",
+    "sync-firestore": "node --env-file-if-exists=secrets/groq.env src/sync-firestore.js",
+    "scrub-firestore": "node --env-file-if-exists=secrets/groq.env src/scrub-firestore.js",
+    "rescore-firestore": "node --env-file-if-exists=secrets/groq.env src/rescore-firestore.js",
+    "recategorize:dry-run": "node --env-file-if-exists=secrets/groq.env src/recategorize-firestore.js --dry-run",
+    "recategorize:apply": "node --env-file-if-exists=secrets/groq.env src/recategorize-firestore.js --apply",
+    "rebuild-catalogue": "node --env-file-if-exists=secrets/groq.env src/rebuild-catalogue.js"
   },
   "dependencies": {
     "express": "^5.2.1",
