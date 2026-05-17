@@ -76,15 +76,22 @@ const ALL_KNOWN_SUB_SLUGS = new Set(
   MAIN_CATEGORIES.flatMap((m) => m.subSlugs)
 );
 
-/// Cross-category attribute surfacing.
-///   slug → attribute flag that pulls a place into this sub even if
-///   the place's identity is something else (e.g. supermarket with
-///   `has_atm: true` appears in the `bank` sub with a "Has ATM" chip).
-const ATTRIBUTE_SURFACING = Object.freeze({
-  bank: 'has_atm',
-  atm: 'has_atm',
-  pharmacy: 'has_pharmacy',
-});
+/// Cross-category attribute surfacing — INTENTIONALLY EMPTY.
+///
+/// Previously this injected places into buckets they didn't natively
+/// belong to (e.g. supermarkets-with-ATMs into the Bank bucket via
+/// has_atm). The intent was for the mobile UI to render a "Has ATM"
+/// chip so users understood why a supermarket was in the Bank tab.
+///
+/// In practice the chip wasn't visually distinctive enough, so users
+/// saw supermarkets in the Banks tab as straight-up wrong data. We
+/// chose strict membership: the Bank tab contains only real banks.
+///
+/// The underlying `attributes.has_atm` / `has_pharmacy` flags are
+/// still computed and stored on each place document — the mobile
+/// detail page can still render those as informational chips. They
+/// just don't drive bucket membership anymore.
+const ATTRIBUTE_SURFACING = Object.freeze({});
 
 /// How many of the top `place.type` strings get their own named
 /// sub-bucket inside the Other main. The rest fall to `misc`.
