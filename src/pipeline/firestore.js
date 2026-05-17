@@ -45,7 +45,8 @@ async function getFirestore() {
   const admin = await import('firebase-admin').catch(() => {
     throw new Error('Run `npm install firebase-admin` first');
   });
-  if (!admin.default.apps.length) {
+  const weInitialized = !admin.default.apps.length;
+  if (weInitialized) {
     admin.default.initializeApp({
       credential: admin.default.credential.applicationDefault(),
       projectId,
@@ -54,7 +55,16 @@ async function getFirestore() {
   _db = admin.default.firestore();
   // Brand-new places may have no rating / weighted_rating yet. Treat
   // `undefined` field values as "field absent" instead of throwing.
-  _db.settings({ ignoreUndefinedProperties: true });
+  //
+  // settings() can only be called ONCE per Firestore instance. If
+  // another module already initialized the app + called settings()
+  // (e.g. recategorize-firestore.js does its own initializeApp +
+  // settings at the top, then calls into us for the index rebuild),
+  // skipping is the right move — we trust whoever got there first
+  // has configured equivalent settings.
+  if (weInitialized) {
+    _db.settings({ ignoreUndefinedProperties: true });
+  }
   return _db;
 }
 
