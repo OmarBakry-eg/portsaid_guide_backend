@@ -33,12 +33,29 @@ const storePath = args.store || new URL('../data/places.json', import.meta.url).
 const runLogPath = new URL('../data/run-log.json', import.meta.url).pathname;
 
 // Default = filter by latest cron run ID. --full bypasses the filter.
+//
+// Resolution order for the run ID we filter by:
+//   1. `--run-id=<value>` CLI flag (explicit override; used by the
+//      matrix GHA workflow where each matrix sibling writes to its
+//      own filesystem and there's no shared run-log.json the merge
+//      job can read).
+//   2. RUN_ID env var (same purpose; the workflow also sets this).
+//   3. data/run-log.json — the latest entry's runId, if recent
+//      (within 24h). Used by the standard single-job cron + local
+//      manual invocations.
+//   4. null → fall back to FULL sync.
 let touchedRunId = null;
 if (!args.full) {
-  touchedRunId = await readLatestRunId(runLogPath);
+  if (typeof args['run-id'] === 'string' && args['run-id'].length > 0) {
+    touchedRunId = args['run-id'];
+  } else if (typeof process.env.RUN_ID === 'string' && process.env.RUN_ID.length > 0) {
+    touchedRunId = process.env.RUN_ID;
+  } else {
+    touchedRunId = await readLatestRunId(runLogPath);
+  }
   if (!touchedRunId) {
     console.log(
-      '  no run-log found / no recent run — falling back to FULL sync'
+      '  no run ID provided / no recent run-log — falling back to FULL sync'
     );
   }
 }

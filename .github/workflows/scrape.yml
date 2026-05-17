@@ -2,21 +2,26 @@ name: scrape-and-sync
 
 # Runs the Port Said scraper every 6 hours and pushes the result to Firestore.
 #
-# Timing notes:
-#   - GitHub Actions free tier on private repos: 2,000 min/month.
-#   - GitHub's hard ceiling for a single job is 360 min (6h); we use 350
-#     to leave a margin for the runner's own teardown.
-#   - As the catalogue grows the scrape gets slower; the cap should sit
-#     comfortably above the longest observed run, not just the average.
-#     A run that's cancelled mid-way leaves Firestore in a half-synced
-#     state — better to over-allocate than truncate.
+# Architecture (post commit 7 — matrix anchors):
+#
+#   ┌──────┐     ┌─────────────────────────────────────────┐     ┌────────────┐
+#   │ prep │ ──> │ scrape (matrix over 6 anchors)          │ ──> │ merge +    │
+#   │      │     │   city-center / port-fouad / el-manakh  │     │ sync       │
+#   │      │     │   el-zohour / north-beach / wide-city   │     │            │
+#   └──────┘     │   each runs in parallel, ~85 min,       │     │ merges     │
+#                │   uploads its own places-<anchor>.json  │     │ artifacts, │
+#                │   artifact                              │     │ delta-     │
+#                └─────────────────────────────────────────┘     │ syncs to   │
+#                                                                │ Firestore  │
+#                                                                └────────────┘
 #
 # Setup (one-time):
 #   1. Repo Settings → Secrets and variables → Actions → New repository secret
 #         Name:  FIREBASE_SERVICE_ACCOUNT
 #         Value: <paste the entire contents of firebase-service-account.json>
-#   2. Push this file to the default branch.
-#   3. The workflow fires automatically every 6h. Manual run:
+#   2. Add GROQ1, GROQ2, GROQ3, GROQ4 secrets (the 4-key Groq rotation).
+#   3. Push this file to the default branch.
+#   4. The workflow fires automatically every 6h. Manual run:
 #         Actions → "scrape-and-sync" → Run workflow.
 
 on:
@@ -28,11 +33,11 @@ on:
   workflow_dispatch:
     inputs:
       categories:
-        description: 'Comma-separated category slugs (blank = default 10)'
+        description: 'Comma-separated category slugs (blank = default 25)'
         required: false
         default: ''
       anchors:
-        description: 'Comma-separated anchor ids (blank = default 2)'
+        description: 'Comma-separated anchor ids (blank = ALL 6)'
         required: false
         default: ''
 
@@ -41,23 +46,74 @@ concurrency:
   group: scrape
   cancel-in-progress: false
 
-# Opt the workflow into Node 24 runtime for JavaScript actions. The
-# `@v4` major versions of actions/checkout, actions/setup-node, etc.
-# still ship a Node 20 entry point; GitHub is deprecating Node 20 on
-# 16 Sept 2026. Setting this now silences the deprecation warning and
-# lets us run on the long-term-supported runtime without waiting for
-# every action to publish a `@v5`.
+# Opt the workflow into Node 24 runtime for JavaScript actions.
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  scrape:
+  # ── Job 1: prep ────────────────────────────────────────────────────
+  # Lightweight setup job that decides what the matrix + sync downstream
+  # will run with. Two things matter:
+  #   - run_id: a SHARED ID that every matrix job will tag its places
+  #             with via the RUN_ID env var. The merge+sync job uses
+  #             this same ID to filter the delta sync. Without a
+  #             shared ID, each matrix job would generate its own and
+  #             the delta filter would only see 1/6th of the writes.
+  #   - anchors / only: parsed from manual-dispatch inputs (or default
+  #                     to all 6 anchors / the standard 25 categories).
+  prep:
     runs-on: ubuntu-latest
-    # GitHub's hard ceiling is 360 min; 350 leaves room for runner
-    # teardown + log upload. Previous value was 50 min which started
-    # cancelling runs mid-scrape as the catalogue grew.
-    timeout-minutes: 350
+    timeout-minutes: 5
+    outputs:
+      run_id: ${{ steps.gen.outputs.run_id }}
+      anchors_json: ${{ steps.gen.outputs.anchors_json }}
+      only: ${{ steps.gen.outputs.only }}
+    steps:
+      - name: Generate shared run ID + parse inputs
+        id: gen
+        run: |
+          # Shared run ID for all matrix siblings + the merge job.
+          # Format matches src/pipeline/orchestrator.js's runId scheme.
+          RUN_ID="run-$(date -u +%Y-%m-%dT%H-%M-%S)-000Z"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "Run ID: $RUN_ID"
 
+          # Default category rotation: high-traffic everyday slugs +
+          # specialty shopping + leisure + auto. --force is passed in
+          # the scraper step, so cadence_hours is ignored.
+          ONLY="${{ github.event.inputs.categories }}"
+          if [ -z "$ONLY" ]; then
+            ONLY="restaurant,coffee,pharmacy,hospital,hotel,supermarket,gas-station,bank,mosque,beach,clothing-men,clothing-women,clothing-kids,shoe-store,candy-store,gift-shop,toy-store,bookstore,florist,jewelry,stationery,gym,cinema,car-wash,car-rental"
+          fi
+          echo "only=$ONLY" >> "$GITHUB_OUTPUT"
+
+          # Anchors: manual dispatch can override, else fan out across
+          # all 6 anchors defined in config/anchors.json.
+          ANCHORS_INPUT="${{ github.event.inputs.anchors }}"
+          if [ -z "$ANCHORS_INPUT" ]; then
+            ANCHORS_INPUT="city-center,port-fouad,el-manakh,el-zohour,north-beach,wide-city"
+          fi
+          # Convert "a,b,c" → JSON array ["a","b","c"] for matrix.
+          ANCHORS_JSON=$(echo "$ANCHORS_INPUT" | jq -R 'split(",")' -c)
+          echo "anchors_json=$ANCHORS_JSON" >> "$GITHUB_OUTPUT"
+          echo "Anchors: $ANCHORS_JSON"
+          echo "Categories: $ONLY"
+
+  # ── Job 2: scrape (matrix over anchors) ────────────────────────────
+  # One job per anchor, all running in parallel. Each restores the
+  # same base places.json cache, scrapes its anchor's neighborhood,
+  # and uploads its result as a per-anchor artifact. fail-fast: false
+  # so a single anchor's failure doesn't kill the run — we'd rather
+  # have 5/6 coverage than zero.
+  scrape:
+    needs: prep
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        anchor: ${{ fromJson(needs.prep.outputs.anchors_json) }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -71,7 +127,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Cache Playwright Chromium (~150 MB) so we don't re-download every run.
       - name: Cache Playwright browsers
         id: playwright-cache
         uses: actions/cache@v4
@@ -87,9 +142,10 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: npx playwright install-deps chromium
 
-      # Persist data/places.json across runs so `first_seen_at` and the
-      # accumulated city-wide store survive between scrapes.
-      - name: Restore places.json cache
+      # All matrix siblings restore from the same base — the most
+      # recent merged store from a previous run. They write to a
+      # per-anchor artifact below, so no cache contention.
+      - name: Restore base places.json cache
         uses: actions/cache/restore@v4
         with:
           path: data
@@ -102,7 +158,7 @@ jobs:
         run: |
           mkdir -p secrets
           if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
-            echo "::error::FIREBASE_SERVICE_ACCOUNT secret is missing. Add it under Settings → Secrets and variables → Actions."
+            echo "::error::FIREBASE_SERVICE_ACCOUNT secret is missing."
             exit 1
           fi
           printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > secrets/firebase-service-account.json
@@ -111,67 +167,154 @@ jobs:
             exit 1
           }
 
-      - name: Run scraper
+      - name: Run scraper for anchor ${{ matrix.anchor }}
         env:
+          # RUN_ID is the shared identifier across all matrix siblings.
+          # The orchestrator reads it and tags every scraped place's
+          # last_scrape_run_id with this value, so the merge+sync job's
+          # delta filter sees all 6 anchors' work as "this run."
+          RUN_ID: ${{ needs.prep.outputs.run_id }}
           FIRESTORE_PROJECT: port-said-guide
           GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/secrets/firebase-service-account.json
-          # Public base for any URLs the scraper emits. Image URLs default to
-          # raw Google CDN now (see config.js); this only matters if you set
-          # PROXY_IMAGE_URLS=1 to opt into server-side proxying.
           API_BASE_URL: https://portsaid-guide-backend.onrender.com
-          # Groq API keys for the hybrid classifier (4-key rotation, JSON
-          # mode on llama-3.1-8b-instant). Missing keys are tolerated —
-          # the classifier falls back to deterministic heuristics, but
-          # quality is materially better with the LLM in the loop.
           GROQ1: ${{ secrets.GROQ1 }}
           GROQ2: ${{ secrets.GROQ2 }}
           GROQ3: ${{ secrets.GROQ3 }}
           GROQ4: ${{ secrets.GROQ4 }}
         run: |
-          ONLY="${{ github.event.inputs.categories }}"
-          ANCHORS="${{ github.event.inputs.anchors }}"
+          echo "Scraping anchor=${{ matrix.anchor }} run_id=$RUN_ID"
+          node src/run-all.js \
+            --force \
+            --only="${{ needs.prep.outputs.only }}" \
+            --anchors="${{ matrix.anchor }}" \
+            --delay=8
 
-          if [ -z "$ONLY" ]; then
-            # Default rotation: the high-traffic everyday slugs (food /
-            # health / hotel / money / fuel / worship / beach) plus the
-            # shopping families the catalogue used to be missing —
-            # clothing by demographic, the specialty stores (candy /
-            # gift / toys / books / florist / jewelry / stationery)
-            # and shoe stores. Leisure adds gym + cinema, auto adds
-            # car-wash + car-rental, so the Outdoors & Leisure and
-            # Car Services mains aren't sparse in the app.
-            # `--force` is set below so cadence_hours on each entry is
-            # ignored for the cron — every category listed here runs on
-            # every scheduled run.
-            ONLY="restaurant,coffee,pharmacy,hospital,hotel,supermarket,gas-station,bank,mosque,beach,clothing-men,clothing-women,clothing-kids,shoe-store,candy-store,gift-shop,toy-store,bookstore,florist,jewelry,stationery,gym,cinema,car-wash,car-rental"
+      # Per-anchor artifact name lets the merge job download all 6
+      # without name collisions.
+      - name: Upload per-anchor places store
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: places-${{ matrix.anchor }}
+          path: data/places.json
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Anchor summary
+        if: always()
+        run: |
+          if [ -f data/places.json ]; then
+            node -e "
+              const s = JSON.parse(require('fs').readFileSync('data/places.json','utf8'));
+              const places = Object.values(s.places ?? {});
+              const thisRun = places.filter(p => p.last_scrape_run_id === '${{ needs.prep.outputs.run_id }}');
+              console.log('Anchor: ${{ matrix.anchor }}');
+              console.log('  Total places in store:', places.length);
+              console.log('  Touched THIS run:    ', thisRun.length);
+            " || true
           fi
-          if [ -z "$ANCHORS" ]; then
-            ANCHORS="wide-city,city-center"
+
+  # ── Job 3: merge-and-sync ──────────────────────────────────────────
+  # Runs after the matrix completes. Downloads every per-anchor
+  # artifact, merges them into a single places.json via
+  # src/merge-stores.js (which calls mergePlace under the hood to
+  # combine signals from places seen by multiple anchors), then runs
+  # sync-firestore.js in delta mode using the shared RUN_ID.
+  #
+  # `if: always() && !cancelled()` runs even when some matrix jobs
+  # failed — partial coverage is better than zero. The merge handles
+  # missing artifacts gracefully (skips them).
+  merge-and-sync:
+    needs: [prep, scrape]
+    if: always() && needs.scrape.result != 'cancelled' && needs.prep.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Restore the base cache as a fallback — if every matrix job
+      # failed (no artifacts), at least we have last run's state to
+      # write back unchanged (which the delta filter will see as
+      # "nothing to sync since no places match this run's ID").
+      - name: Restore base places.json cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: scraper-store-${{ github.run_id }}
+          restore-keys: scraper-store-
+
+      - name: Download all per-anchor artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          pattern: places-*
+
+      - name: List downloaded artifacts
+        run: |
+          echo "Artifacts present:"
+          find artifacts/ -name '*.json' -print 2>/dev/null || echo "(none)"
+
+      - name: Merge per-anchor stores into data/places.json
+        run: |
+          # Glob over every per-anchor places.json under artifacts/.
+          # merge-stores.js calls mergePlace for any place seen by
+          # multiple anchors (unions source_anchors, keeps best
+          # rating/photos, etc.) and passes through singletons as-is.
+          shopt -s nullglob
+          INPUTS=(artifacts/places-*/places.json)
+          if [ ${#INPUTS[@]} -eq 0 ]; then
+            echo "::warning::No per-anchor artifacts found. Using base cache as-is."
+            # data/places.json already exists from the cache restore.
+          else
+            node src/merge-stores.js --out=data/places.json "${INPUTS[@]}"
           fi
 
-          echo "scraping categories=$ONLY anchors=$ANCHORS"
-          node src/run-all.js --force --only="$ONLY" --anchors="$ANCHORS" --delay=8
-
-      - name: Sync to Firestore
+      - name: Write Firebase service account from secret
         env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          mkdir -p secrets
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "::error::FIREBASE_SERVICE_ACCOUNT secret is missing."
+            exit 1
+          fi
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > secrets/firebase-service-account.json
+
+      - name: Sync merged store to Firestore (delta mode)
+        env:
+          # Same RUN_ID the matrix siblings used. sync-firestore.js
+          # reads --run-id (which beats env, which beats run-log), so
+          # the delta filter correctly limits writes to places this
+          # run touched across all 6 anchors.
+          RUN_ID: ${{ needs.prep.outputs.run_id }}
           FIRESTORE_PROJECT: port-said-guide
           GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/secrets/firebase-service-account.json
-        run: node src/sync-firestore.js
+        run: node src/sync-firestore.js --run-id="$RUN_ID"
 
-      # Save the merged store so the next run inherits first_seen_at etc.
-      - name: Save places.json cache
+      # Save the merged store as the next run's base cache.
+      - name: Save merged store cache
         if: always()
         uses: actions/cache/save@v4
         with:
           path: data
           key: scraper-store-${{ github.run_id }}
 
-      # Make the store downloadable for inspection (7-day retention).
-      - name: Upload store artifact
+      # Make the merged store downloadable for inspection.
+      - name: Upload merged store artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: places-store-${{ github.run_id }}
+          name: places-store-merged-${{ github.run_id }}
           path: data/places.json
           retention-days: 7
 
@@ -182,11 +325,15 @@ jobs:
             node -e "
               const s = JSON.parse(require('fs').readFileSync('data/places.json','utf8'));
               const places = Object.values(s.places ?? {});
-              console.log('TOTAL:', places.length, 'places');
+              const thisRun = places.filter(p => p.last_scrape_run_id === '${{ needs.prep.outputs.run_id }}');
+              console.log('=== Merged store summary ===');
+              console.log('Total places:', places.length);
+              console.log('Touched THIS run:', thisRun.length);
               const cats = {};
               for (const p of places) for (const c of p.source_categories ?? []) cats[c] = (cats[c] ?? 0) + 1;
+              console.log('\\n=== source_categories distribution ===');
               for (const [k,v] of Object.entries(cats).sort((a,b) => b[1] - a[1])) {
-                console.log('  ' + k.padEnd(16) + ' ' + v);
+                console.log('  ' + k.padEnd(18) + ' ' + v);
               }
             "
           fi

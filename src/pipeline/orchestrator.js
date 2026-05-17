@@ -69,7 +69,15 @@ export async function runOrchestrator({
   const store = await loadStore(storePath);
 
   const jobs = await buildJobList({ runLog, anchors, categories, force, only, onlyAnchors });
-  const runId = `run-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+  // When invoked as part of a parallel GHA matrix (one job per anchor),
+  // every matrix sibling needs to tag its scraped places with the SAME
+  // run ID so the delta-sync filter in sync-firestore.js sees the full
+  // set as "this run's touches" rather than 1/N of it. The workflow
+  // passes that shared ID via RUN_ID. Fall back to generating one when
+  // run standalone (local dev, manual invocation, single-job workflows).
+  const runId =
+    process.env.RUN_ID ||
+    `run-${new Date().toISOString().replace(/[:.]/g, '-')}`;
 
   console.log(`◆ ${runId}`);
   console.log(`  ${jobs.length} jobs queued (anchors=${anchors.length}, categories=${categories.length}, force=${force})`);
