@@ -165,16 +165,27 @@ function assemble({
 
 /// Decide which slugs land in source_categories.
 ///
-/// Conservatism rule (from the design discussion):
-///   - Primary slug is always included
-///   - Queried slug is preserved when fit is "strong" or "loose"
-///   - Queried slug is dropped when fit is "feature_only" or "unrelated",
-///     UNLESS doing so would require confidence ≥ REMOVE_FROM_QUERIED
-///     (high bar — we'd rather leave a slightly-off placement than
-///     wrongly nuke a working one)
+/// Strict membership rule:
+///   - Primary slug is always included.
+///   - Queried slug is kept ONLY when fit is "strong" or "loose"
+///     (loose = same family, e.g. fast-food under restaurant; see
+///     LOOSE_NEIGHBORS in heuristics.js).
+///   - Queried slug is DROPPED for "feature_only" and "unrelated",
+///     regardless of confidence.
 ///
-/// In practice this means borderline cases stick with the queried slug
-/// until the classifier is quite sure they don't belong.
+/// Rationale: the previous policy kept the queried slug as a "safety
+/// net" when the classifier's confidence was below
+/// THRESHOLDS.REMOVE_FROM_QUERIED. That produced clinics-in-cinemas,
+/// supermarkets-in-banks, fast-food-in-cinemas, etc., because a
+/// confidence of e.g. 0.75 ("I'm 75% sure this clinic is unrelated to
+/// cinema") was treated as "not sure enough, leave it in." It should
+/// have been "75% sure → drop it." We now drop, period.
+///
+/// "feature_only" still gets dropped from source_categories — the
+/// feature is captured in the attributes object (has_atm, has_pharmacy)
+/// and surfaced via ATTRIBUTE_SURFACING in catalogue/bucket.js, which
+/// preserves the cross-category UX without contaminating the primary
+/// list.
 export function computeSourceCategories({ primary, fit, queriedSlug, confidence }) {
   const set = new Set([primary]);
 
@@ -182,21 +193,18 @@ export function computeSourceCategories({ primary, fit, queriedSlug, confidence 
   // whose original query is unknown) → just use the primary.
   if (!queriedSlug) return [...set];
 
+  // Strict: only keep the queried slug for "strong" or "loose" fits.
+  // Anything else (feature_only, unrelated) gets dropped regardless
+  // of confidence — we'd rather have a place in "other" or its true
+  // primary bucket than incorrectly tagged in the wrong category.
   if (fit === 'strong' || fit === 'loose') {
     set.add(queriedSlug);
-    return [...set].sort();
   }
+  // Reference `confidence` so older callers don't break — it's no
+  // longer the deciding factor for queried-slug retention, but it
+  // remains on the classification doc for telemetry.
+  void confidence;
 
-  // "feature_only" or "unrelated" — drop the queried slug IF we're
-  // confident enough. Otherwise keep it to be safe.
-  if (confidence >= THRESHOLDS.REMOVE_FROM_QUERIED) {
-    return [...set].sort();
-  }
-
-  // Not confident enough to remove — keep the queried slug as a safety
-  // net. The user won't see a glaring misclassification, and the next
-  // scrape may reclassify with higher confidence.
-  set.add(queriedSlug);
   return [...set].sort();
 }
 

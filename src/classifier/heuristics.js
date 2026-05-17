@@ -198,42 +198,85 @@ function attributesIndicateSlug(attributes, slug) {
 }
 
 /// Manually curated "these slugs are adjacent, keep the queried one"
-/// list. A money-exchange office showing up under a "bank" query is
-/// loosely related — fine to surface in the bank tab. A cinema isn't.
+/// list. Used by computeSourceCategories: when a place's primary is
+/// in this map AND the queried slug is one of the listed neighbors,
+/// the queried slug is kept (fit = "loose"). Otherwise the queried
+/// slug is dropped, regardless of confidence.
+///
+/// Curation principle: keep only TRUE family hierarchies — categories
+/// users would reasonably expect to see overlapping. Cross-category
+/// adjacency (cinema↔mall, gym↔park, electronics↔mall, bank↔money-
+/// exchange) is removed: those produced wrong placements in the wild
+/// (e.g. supermarkets and clinics ending up in the Cinemas tab via
+/// the loose-neighbor escape hatch). Real banks belong only in Bank;
+/// real cinemas only in Cinema. Period.
+///
+/// Cross-category SURFACING via attributes (e.g. supermarket-with-ATM
+/// appearing in the Bank tab with a "Has ATM" chip) is preserved
+/// separately by ATTRIBUTE_SURFACING in catalogue/bucket.js. That
+/// path is structured (the mobile renders a chip to disambiguate);
+/// LOOSE_NEIGHBORS is unstructured (no chip) which is why misuse
+/// there caused visible contamination.
 const LOOSE_NEIGHBORS = Object.freeze({
-  bank: ['atm', 'money-exchange'],
-  atm: ['bank', 'money-exchange'],
-  'money-exchange': ['bank', 'atm'],
-  restaurant: ['fast-food', 'fish-seafood', 'coffee'],
+  // Money — atm and bank are interchangeable for browsing.
+  // money-exchange is a different service; not a neighbor.
+  bank: ['atm'],
+  atm: ['bank'],
+  'money-exchange': [],
+
+  // Food family — fast-food and fish-seafood are kinds of restaurants.
+  // Coffee is its own thing (not a restaurant), but bakery/dessert are
+  // close enough to a coffee shop to surface together.
+  restaurant: ['fast-food', 'fish-seafood'],
   'fast-food': ['restaurant'],
   'fish-seafood': ['restaurant'],
-  coffee: ['restaurant', 'dessert', 'bakery'],
+  coffee: ['bakery', 'dessert'],
   bakery: ['dessert', 'coffee'],
   dessert: ['bakery', 'candy-store', 'coffee'],
   'candy-store': ['dessert'],
+
+  // Healthcare hierarchy.
   hospital: ['clinic'],
   clinic: ['hospital', 'dentist'],
   dentist: ['clinic'],
-  supermarket: ['grocery', 'mall'],
+
+  // Grocery hierarchy. Mall is a different concept (multi-tenant
+  // shopping building), not a synonym for supermarket — removed.
+  supermarket: ['grocery'],
   grocery: ['supermarket'],
-  mall: ['supermarket'],
+  mall: [],
+
+  // Clothing — true subcategories.
   clothing: ['clothing-men', 'clothing-women', 'clothing-kids', 'shoe-store'],
   'clothing-men': ['clothing', 'shoe-store'],
   'clothing-women': ['clothing', 'shoe-store'],
   'clothing-kids': ['clothing', 'shoe-store', 'toy-store'],
   'shoe-store': ['clothing'],
-  electronics: ['mall'],
+
+  // Lodging.
   hotel: ['hostel'],
   hostel: ['hotel'],
-  gym: ['park'],
-  park: ['beach', 'tourist-attr'],
-  beach: ['park', 'tourist-attr'],
-  cinema: ['mall', 'tourist-attr'],
+
+  // Outdoor recreation — beach and park genuinely overlap (both are
+  // open-air leisure spaces). tourist-attr / gym / cinema are distinct
+  // and were producing junk; removed.
+  park: ['beach'],
+  beach: ['park'],
+  gym: [],
+  cinema: [],
+  'tourist-attr': [],
+
+  // Worship — strictly siloed.
   mosque: [],
   church: [],
+
+  // Education.
   school: ['university', 'library'],
   university: ['school', 'library'],
   library: ['school', 'university', 'bookstore'],
+
+  // Tech / specialty — these are distinct categories.
+  electronics: [],
 });
 
 function isLooselyRelated(primary, queried) {
