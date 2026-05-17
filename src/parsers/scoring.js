@@ -82,20 +82,27 @@ export function isAccepted(place) {
     return false;
   }
 
-  // Geo-fence: must be inside the Port Said bounding box. Many junk pins
-  // have no coords at all — accept those for now but rely on quality_score
-  // to filter them.
+  // Geo-fence: REQUIRE coordinates AND require them inside Port Said.
+  //
+  // Previously, places without coordinates passed through this check
+  // (only qualityScore filtered them, and that doesn't know geography).
+  // That was the primary vector for cross-region pollution — e.g.
+  // coffee shops in Saudi Arabia appearing in Port Said queries when
+  // Google's wide-radius localization returned global suggestions
+  // without coordinates. With strict geo-fencing, every place must
+  // prove it's actually in Port Said + Port Fouad.
   const lat = place.gps_coordinates?.latitude;
   const lon = place.gps_coordinates?.longitude;
-  if (typeof lat === 'number' && typeof lon === 'number') {
-    if (
-      lat < PORT_SAID_BOUNDS.minLat ||
-      lat > PORT_SAID_BOUNDS.maxLat ||
-      lon < PORT_SAID_BOUNDS.minLon ||
-      lon > PORT_SAID_BOUNDS.maxLon
-    ) {
-      return false;
-    }
+  if (typeof lat !== 'number' || typeof lon !== 'number') {
+    return false;
+  }
+  if (
+    lat < PORT_SAID_BOUNDS.minLat ||
+    lat > PORT_SAID_BOUNDS.maxLat ||
+    lon < PORT_SAID_BOUNDS.minLon ||
+    lon > PORT_SAID_BOUNDS.maxLon
+  ) {
+    return false;
   }
 
   if (qualityScore(place) < QUALITY_THRESHOLD) return false;
