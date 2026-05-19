@@ -1,6 +1,12 @@
 // Admin action handlers for /omar-dash. Each reads a single
 // place_submissions/{id} doc, performs the action, writes back.
 //
+// Side effect: on approve / reject, we email the submitter so they
+// don't have to refresh the mobile app to learn the outcome. Email
+// is best-effort; failure is logged but doesn't block the action.
+
+import { sendSubmissionDecisionEmail } from '../email.js';
+//
 // Approve:
 //   - Re-fetch the submitted URL's place if extracted_place_id is set
 //     → already happened during submission; place is in places/.
@@ -104,6 +110,15 @@ export async function approveSubmission(id, { adminNote }) {
     resolved_by: 'admin',
     admin_note: adminNote || null,
   });
+
+  // Best-effort notification email to the submitter. Resolves the
+  // user's email from users/{uid} since the submission row only
+  // stores the uid.
+  notifyDecision(db, data.submitted_by_uid, 'approved', {
+    placeTitle: data.extracted_title,
+    reason: adminNote,
+  }).catch((e) => console.warn('approve-email failed:', e.message));
+
   return { id, place_id: placeId };
 }
 
@@ -112,6 +127,7 @@ export async function rejectSubmission(id, { reason }) {
   const ref = db.collection('place_submissions').doc(id);
   const snap = await ref.get();
   if (!snap.exists) throw new Error(`submission ${id} not found`);
+  const data = snap.data();
   const now = new Date();
   await ref.update({
     status: 'rejected',
@@ -119,5 +135,28 @@ export async function rejectSubmission(id, { reason }) {
     resolved_by: 'admin',
     admin_note: reason || 'Rejected by admin (no reason provided)',
   });
+
+  notifyDecision(db, data.submitted_by_uid, 'rejected', {
+    placeTitle: data.extracted_title,
+    reason: reason || data.admin_note || null,
+  }).catch((e) => console.warn('reject-email failed:', e.message));
+
   return { id };
+}
+
+/// Send the submission-decision email. Resolves the submitter's
+/// email by reading users/{uid}.email — that was upserted by the
+/// mobile on sign-in.
+async function notifyDecision(db, uid, decision, { placeTitle, reason }) {
+  if (!uid) return;
+  const userSnap = await db.collection('users').doc(uid).get();
+  if (!userSnap.exists) return;
+  const email = userSnap.data().email;
+  if (!email) return;
+  await sendSubmissionDecisionEmail({
+    toEmail: email,
+    decision,
+    placeTitle,
+    reason,
+  });
 }

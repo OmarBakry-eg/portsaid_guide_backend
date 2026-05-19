@@ -27,6 +27,8 @@ import {
 import { buildCatalogue } from '../catalogue/bucket.js';
 import { requireAuth } from './middleware/firebase-auth.js';
 import { makeSubmitPlaceHandler } from './routes/submit-place.js';
+import { makeSupportContactHandler } from './routes/support-contact.js';
+import { makeReportPlaceHandler } from './routes/report-place.js';
 import { mountDashboard } from './dashboard/index.js';
 
 const STORE_PATH = new URL('../../data/places.json', import.meta.url).pathname;
@@ -736,6 +738,10 @@ app.get('/catalogue', async (req, res) => {
 //   - rate_limited: > 10 submissions in 24h for this user
 // See src/server/routes/submit-place.js for the full flow.
 app.post('/places/submit', requireAuth(), makeSubmitPlaceHandler());
+
+// ----- Support contact + place report (auth-gated; Resend-backed) -----
+app.post('/support/contact', requireAuth(), makeSupportContactHandler());
+app.post('/places/:placeId/report', requireAuth(), makeReportPlaceHandler());
 
 // ----- /omar-dash — server-rendered admin dashboard (basic auth) ------
 // Mounts GET /omar-dash + GET/POST /omar-dash/api/* routes for managing
