@@ -1,5 +1,5 @@
 {
-  "$comment": "Geographic anchors for searches. Each scrape covers ~1.5km radius at zoom 15. Together these anchors cover Port Said + Port Fouad. To add coverage, append an anchor — the deduplicator handles overlapping results by place_id.",
+  "$comment": "Geographic anchors for Google Maps searches. Each scrape covers a radius that depends on zoom: ~3km at zoom 14, ~1.5km at zoom 15, ~500m at zoom 16. Together these anchors cover Port Said + Port Fouad densely enough to catch small local businesses that fall below Google's top-N ranking at wider anchors. To extend coverage, append an anchor — the per-anchor matrix in GHA handles deduplication via mergePlace.",
   "anchors": [
     {
       "id": "city-center",
@@ -30,6 +30,36 @@
       "id": "wide-city",
       "label": "Whole Port Said + Port Fouad at zoom 14 (catches edge places single-district anchors miss)",
       "ll": "@31.2386731,32.26457,14z"
+    },
+    {
+      "id": "al-zehour-shops",
+      "label": "Al Zehour shop strip (high-density commercial area, zoom 16). Targets Scar/Nine/Torino/ZAK and other small businesses that get ranked below the top-N at wider anchors.",
+      "ll": "@31.2625,32.2720,16z"
+    },
+    {
+      "id": "port-said-west",
+      "label": "West Port Said inner residential — gap between city-center and el-manakh",
+      "ll": "@31.2680,32.2820,15z"
+    },
+    {
+      "id": "port-said-south-mid",
+      "label": "South-central Port Said — gap between wide-city and el-zohour",
+      "ll": "@31.2400,32.2900,15z"
+    },
+    {
+      "id": "port-said-east-coast",
+      "label": "East coast central Port Said — gap between city-center and port-fouad (canal-side)",
+      "ll": "@31.2580,32.3100,15z"
+    },
+    {
+      "id": "port-fouad-north",
+      "label": "North Port Fouad — extends coverage past the existing port-fouad anchor",
+      "ll": "@31.2700,32.3300,15z"
+    },
+    {
+      "id": "north-coast-east",
+      "label": "Eastern beach / north coast — toward the Port Fouad bridge",
+      "ll": "@31.2830,32.3200,15z"
     }
   ]
 }

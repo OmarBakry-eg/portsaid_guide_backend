@@ -88,10 +88,13 @@ jobs:
           echo "only=$ONLY" >> "$GITHUB_OUTPUT"
 
           # Anchors: manual dispatch can override, else fan out across
-          # all 6 anchors defined in config/anchors.json.
+          # all 12 anchors defined in config/anchors.json. The 6 added
+          # in commit ab3ca69+ target known coverage gaps the original
+          # 6 anchors missed (e.g. small clothing stores in Al Zehour
+          # that fell below Google's top-N ranking at wider anchors).
           ANCHORS_INPUT="${{ github.event.inputs.anchors }}"
           if [ -z "$ANCHORS_INPUT" ]; then
-            ANCHORS_INPUT="city-center,port-fouad,el-manakh,el-zohour,north-beach,wide-city"
+            ANCHORS_INPUT="city-center,port-fouad,el-manakh,el-zohour,north-beach,wide-city,al-zehour-shops,port-said-west,port-said-south-mid,port-said-east-coast,port-fouad-north,north-coast-east"
           fi
           # Convert "a,b,c" → JSON array ["a","b","c"] for matrix.
           ANCHORS_JSON=$(echo "$ANCHORS_INPUT" | jq -R 'split(",")' -c)
@@ -111,7 +114,10 @@ jobs:
     timeout-minutes: 350
     strategy:
       fail-fast: false
-      max-parallel: 6
+      # Cap at 12 to stay under the per-public-repo free-tier soft limit
+      # of 20 concurrent Linux runners. Matches the current anchor count
+      # in config/anchors.json — every anchor runs in parallel, no queue.
+      max-parallel: 12
       matrix:
         anchor: ${{ fromJson(needs.prep.outputs.anchors_json) }}
     steps:
