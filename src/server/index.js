@@ -25,6 +25,8 @@ import {
   uploadOnePlace,
 } from '../pipeline/firestore.js';
 import { buildCatalogue } from '../catalogue/bucket.js';
+import { requireAuth } from './middleware/firebase-auth.js';
+import { makeSubmitPlaceHandler } from './routes/submit-place.js';
 
 const STORE_PATH = new URL('../../data/places.json', import.meta.url).pathname;
 const REVIEWS_PER_PAGE = 8;
@@ -32,6 +34,10 @@ const PHOTOS_PER_PAGE = 20;
 
 const app = express();
 app.disable('x-powered-by');
+// JSON body parser — required for POST /places/submit and the
+// support / report endpoints landing in Phase D. Cap is intentionally
+// small (32 KB) since the only body content is a URL or a short note.
+app.use(express.json({ limit: '32kb' }));
 
 // ----- /img — image proxy (registered FIRST so nothing shadows it) -----
 app.get('/img', (req, res, next) => {
@@ -718,6 +724,17 @@ app.get('/catalogue', async (req, res) => {
     });
   }
 });
+
+// ----- POST /places/submit (auth-gated) ------------------------------
+// Mobile sends `{ url }` + Firebase ID token. Outcomes the handler
+// can return:
+//   - duplicate:  place already in catalogue (returns place + breadcrumb)
+//   - added:      auto-classified above threshold + in bbox (returns place)
+//   - pending:    AI confidence below threshold; admin review queue
+//   - rejected:   outside bbox or malformed URL
+//   - rate_limited: > 10 submissions in 24h for this user
+// See src/server/routes/submit-place.js for the full flow.
+app.post('/places/submit', requireAuth(), makeSubmitPlaceHandler());
 
 app.get('/healthz', async (_req, res) => {
   const store = await loadStore();
