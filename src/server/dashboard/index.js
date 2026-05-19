@@ -45,7 +45,13 @@ import { renderDashboardHtml } from './views/dashboard-html.js';
 const ADMIN_EMAIL =
   process.env.OMAR_DASH_USER || 'omarsalembakry1@gmail.com';
 const ADMIN_PASSWORD = process.env.OMAR_DASH_PASS || '123Omar#';
-const REALM = 'PortSaid Guide — Admin';
+// ASCII-only — Express 5 / Node strictly validate header values
+// against Latin-1, and the WWW-Authenticate realm becomes a header
+// value. The em-dash here (U+2014) caused the no-auth path to throw
+// inside res.set(), surfacing as a 500 in browsers (which send the
+// first request without an Authorization header, so they hit this
+// path on every cold visit).
+const REALM = 'PortSaid Guide Admin';
 
 /// Minimal HTTP Basic-Auth middleware. Reads `Authorization: Basic
 /// base64(user:pass)`. On miss / mismatch sends 401 + a
