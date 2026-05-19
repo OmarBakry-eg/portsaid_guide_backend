@@ -18,7 +18,6 @@
   },
   "dependencies": {
     "express": "^5.2.1",
-    "express-basic-auth": "^1.2.1",
     "firebase-admin": "^13.9.0",
     "groq-sdk": "^0.7.0",
     "playwright": "^1.49.0",

@@ -2,24 +2,29 @@
 // submitted places. Lives on the existing Express server (Render).
 //
 // Stack:
-//   - express-basic-auth for the /omar-dash gate
+//   - Inline Basic-Auth middleware (no external dep) — earlier we
+//     used express-basic-auth, but the npm package proved finicky on
+//     Render with Express 5 / ESM (deploy-time install failures led
+//     to module-not-found at boot → 500 on every request). The
+//     inline version is ~25 lines and zero risk of dep drift.
 //   - Server-rendered HTML using template literals (no jsx, no build)
 //   - Tailwind via CDN play.tailwindcss.com for the dark glass theme
 //   - Lucide icons inlined SVG from CDN
-//   - Vanilla fetch() for client-side interactions (approve / reject /
-//     refresh)
-//
-// Why this stack: zero build step, mounts cleanly inside the existing
-// Express app, easy to ship from Render without a separate process.
+//   - Vanilla fetch() for client-side interactions
 //
 // Routes mounted under /omar-dash:
-//   GET  /omar-dash                       → main view (pending queue)
+//   GET  /omar-dash                       → main HTML view (basic auth)
+//   GET  /omar-dash/_health               → unprotected probe; reports
+//                                          whether the module + all
+//                                          imports loaded cleanly
 //   GET  /omar-dash/api/submissions       → JSON of pending+history
-//   POST /omar-dash/api/submissions/:id/approve  → admin action
-//   POST /omar-dash/api/submissions/:id/reject   → admin action
-//   GET  /omar-dash/static/*              → static assets (CSS/JS)
-
-import basicAuth from 'express-basic-auth';
+//   POST /omar-dash/api/submissions/:id/approve
+//   POST /omar-dash/api/submissions/:id/reject
+//   GET  /omar-dash/api/places?main=&sub=&search=
+//   GET  /omar-dash/api/users
+//   GET  /omar-dash/api/reports?status=
+//   POST /omar-dash/api/reports/:id/resolve
+//   GET  /omar-dash/api/stats
 
 import {
   approveSubmission,
@@ -35,84 +40,134 @@ import {
 } from './admin-queries.js';
 import { renderDashboardHtml } from './views/dashboard-html.js';
 
-/// Admin credentials. These match what the user specified in the
-/// product spec: `omarsalembakry1@gmail.com / 123Omar#`. Use env-var
-/// overrides when set so the credential rotates easily in production.
+/// Admin credentials. Defaults match the product spec; env vars
+/// override in production.
 const ADMIN_EMAIL =
   process.env.OMAR_DASH_USER || 'omarsalembakry1@gmail.com';
 const ADMIN_PASSWORD = process.env.OMAR_DASH_PASS || '123Omar#';
+const REALM = 'PortSaid Guide — Admin';
+
+/// Minimal HTTP Basic-Auth middleware. Reads `Authorization: Basic
+/// base64(user:pass)`. On miss / mismatch sends 401 + a
+/// `WWW-Authenticate` challenge so the browser prompts.
+///
+/// Inlining is intentional: avoids a small npm dep that surprised us
+/// on Render (deploy-time failures caused dashboard 500s before).
+function basicAuthGate(req, res, next) {
+  const hdr =
+    req.headers.authorization || req.headers.Authorization || '';
+  const match =
+    typeof hdr === 'string' ? hdr.match(/^Basic\s+(.+)$/i) : null;
+  if (match) {
+    let decoded;
+    try {
+      decoded = Buffer.from(match[1], 'base64').toString('utf-8');
+    } catch {
+      decoded = '';
+    }
+    const sep = decoded.indexOf(':');
+    if (sep > 0) {
+      const user = decoded.slice(0, sep);
+      const pass = decoded.slice(sep + 1);
+      if (user === ADMIN_EMAIL && pass === ADMIN_PASSWORD) {
+        return next();
+      }
+    }
+  }
+  res.set('WWW-Authenticate', `Basic realm="${REALM}", charset="UTF-8"`);
+  res.status(401).type('text/plain').send(
+    'Authentication required. Use the admin Gmail + password.'
+  );
+}
+
+/// Tiny wrapper that catches handler errors and returns a JSON 500.
+/// Express 5 propagates thrown async errors to the default handler,
+/// which sends an HTML error page — useless for /api endpoints. This
+/// wraps each handler in a try/catch that returns structured JSON.
+function jsonHandler(fn) {
+  return async (req, res) => {
+    try {
+      await fn(req, res);
+    } catch (e) {
+      console.error('[omar-dash]', req.method, req.path, '→', e.stack || e);
+      if (!res.headersSent) {
+        res.status(500).json({ ok: false, error: e.message || String(e) });
+      }
+    }
+  };
+}
 
 /// Mount the dashboard on the supplied Express app. Call once at
-/// server start (after `express.json()` is wired and `requireAuth()`
-/// middleware imported, but before catch-all 404).
+/// server start (after `express.json()` is wired).
 export function mountDashboard(app) {
-  const gate = basicAuth({
-    users: { [ADMIN_EMAIL]: ADMIN_PASSWORD },
-    challenge: true,
-    realm: 'PortSaid Guide — Admin',
-    unauthorizedResponse: () =>
-      'Authentication required. Use your admin Gmail + password.',
+  // ── Unprotected health probe ──
+  // No basic-auth. Confirms the module loaded + all sibling imports
+  // resolved. If /omar-dash 500s but this returns 200, the issue
+  // is in basicAuth / handler. If both 500, the module itself is
+  // broken at import time.
+  app.get('/omar-dash/_health', (_req, res) => {
+    res.json({
+      ok: true,
+      module: 'dashboard',
+      admin_email_set: !!process.env.OMAR_DASH_USER,
+      admin_pass_set: !!process.env.OMAR_DASH_PASS,
+      firestore_project: process.env.FIRESTORE_PROJECT || null,
+      ts: new Date().toISOString(),
+    });
   });
 
-  // Main dashboard view. Pre-renders with no data; the page itself
-  // calls the JSON API to populate. Keeps the HTML cacheable.
-  app.get('/omar-dash', gate, (_req, res) => {
-    res.setHeader('Cache-Control', 'no-store');
-    res.type('html').send(renderDashboardHtml());
-  });
-
-  // JSON API: list submissions with optional status filter.
-  // Query params:
-  //   ?status=pending|approved|rejected|duplicate (default: pending)
-  //   ?limit=50 (default 100; max 500)
-  app.get('/omar-dash/api/submissions', gate, async (req, res) => {
+  // ── Main view (basic-auth gated) ──
+  app.get('/omar-dash', basicAuthGate, (_req, res) => {
     try {
+      res.setHeader('Cache-Control', 'no-store');
+      res.type('html').send(renderDashboardHtml());
+    } catch (e) {
+      console.error('[omar-dash] render failed:', e.stack || e);
+      res
+          .status(500)
+          .type('text/plain')
+          .send('Dashboard render failed: ' + (e.message || String(e)));
+    }
+  });
+
+  // ── JSON API ──
+  app.get(
+    '/omar-dash/api/submissions',
+    basicAuthGate,
+    jsonHandler(async (req, res) => {
       const status = (req.query.status || 'pending').toString();
       const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
       const list = await listSubmissions({ status, limit });
       res.json({ ok: true, status, count: list.length, items: list });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
-  });
+    })
+  );
 
-  // Approve action.
   app.post(
     '/omar-dash/api/submissions/:id/approve',
-    gate,
-    async (req, res) => {
-      try {
-        const result = await approveSubmission(req.params.id, {
-          adminNote: req.body?.note,
-        });
-        res.json({ ok: true, ...result });
-      } catch (e) {
-        res.status(500).json({ ok: false, error: e.message });
-      }
-    }
+    basicAuthGate,
+    jsonHandler(async (req, res) => {
+      const result = await approveSubmission(req.params.id, {
+        adminNote: req.body?.note,
+      });
+      res.json({ ok: true, ...result });
+    })
   );
 
-  // Reject action.
   app.post(
     '/omar-dash/api/submissions/:id/reject',
-    gate,
-    async (req, res) => {
-      try {
-        const result = await rejectSubmission(req.params.id, {
-          reason: req.body?.reason,
-        });
-        res.json({ ok: true, ...result });
-      } catch (e) {
-        res.status(500).json({ ok: false, error: e.message });
-      }
-    }
+    basicAuthGate,
+    jsonHandler(async (req, res) => {
+      const result = await rejectSubmission(req.params.id, {
+        reason: req.body?.reason,
+      });
+      res.json({ ok: true, ...result });
+    })
   );
 
-  // ── Phase E: places / users / reports / stats endpoints ─────────────
-
-  // GET /omar-dash/api/places?main=&sub=&search=&limit=
-  app.get('/omar-dash/api/places', gate, async (req, res) => {
-    try {
+  app.get(
+    '/omar-dash/api/places',
+    basicAuthGate,
+    jsonHandler(async (req, res) => {
       const items = await listPlaces({
         mainSlug: req.query.main?.toString(),
         subSlug: req.query.sub?.toString(),
@@ -120,57 +175,54 @@ export function mountDashboard(app) {
         limit: Math.min(parseInt(req.query.limit || '100', 10), 500),
       });
       res.json({ ok: true, count: items.length, items });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
-  });
+    })
+  );
 
-  // GET /omar-dash/api/users?limit=
-  app.get('/omar-dash/api/users', gate, async (req, res) => {
-    try {
+  app.get(
+    '/omar-dash/api/users',
+    basicAuthGate,
+    jsonHandler(async (req, res) => {
       const items = await listUsers({
         limit: Math.min(parseInt(req.query.limit || '100', 10), 500),
       });
       res.json({ ok: true, count: items.length, items });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
-  });
+    })
+  );
 
-  // GET /omar-dash/api/reports?status=open
-  app.get('/omar-dash/api/reports', gate, async (req, res) => {
-    try {
+  app.get(
+    '/omar-dash/api/reports',
+    basicAuthGate,
+    jsonHandler(async (req, res) => {
       const items = await listReports({
         status: (req.query.status || 'open').toString(),
         limit: Math.min(parseInt(req.query.limit || '100', 10), 500),
       });
       res.json({ ok: true, count: items.length, items });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
-  });
+    })
+  );
 
-  // POST /omar-dash/api/reports/:id/resolve
-  app.post('/omar-dash/api/reports/:id/resolve', gate, async (req, res) => {
-    try {
+  app.post(
+    '/omar-dash/api/reports/:id/resolve',
+    basicAuthGate,
+    jsonHandler(async (req, res) => {
       const out = await resolveReport(req.params.id);
       res.json({ ok: true, ...out });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
-  });
+    })
+  );
 
-  // GET /omar-dash/api/stats
-  app.get('/omar-dash/api/stats', gate, async (_req, res) => {
-    try {
+  app.get(
+    '/omar-dash/api/stats',
+    basicAuthGate,
+    jsonHandler(async (_req, res) => {
       const stats = await getStats();
       res.json({ ok: true, ...stats });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
-  });
+    })
+  );
 
   console.log(
-    `◆ /omar-dash mounted (admin user: ${ADMIN_EMAIL.replace(/(.{2}).+(@.+)/, '$1***$2')})`
+    `◆ /omar-dash mounted (user=${ADMIN_EMAIL.replace(
+      /(.{2}).+(@.+)/,
+      '$1***$2'
+    )})`
   );
 }
