@@ -23,6 +23,7 @@ import { existsSync } from 'node:fs';
 import { parseArgs } from './util/args.js';
 import { buildCatalogue } from './catalogue/bucket.js';
 import {
+  listAllPlaces,
   syncStoreToFirestore,
   writeCatalogue,
   writePlaceTypesIndex,
@@ -68,42 +69,49 @@ if (touchedRunId) {
 }
 
 try {
-  // syncStoreToFirestore now returns the in-memory places array as well
-  // as the uploaded count. Threading that array through the rest of the
-  // sync avoids two redundant `listAllPlaces()` round-trips (~3,600
-  // Firestore reads each) that were exhausting the free tier's 50k/day
-  // read quota and producing `8 RESOURCE_EXHAUSTED: Quota exceeded.`
-  // mid-run.
+  // syncStoreToFirestore performs the delta write (only places touched
+  // this cron run, filtered by touchedRunId). The returned `places`
+  // array is the local in-memory store — useful when the catalogue
+  // rebuild can trust the local cache, but the cache CAN drift from
+  // Firestore when independent edits happen between cron runs (e.g. a
+  // recategorize-firestore.js backfill that cleaned categorization in
+  // Firestore but didn't update the GHA cache).
   //
-  // When touchedRunId is set, only places with last_scrape_run_id
-  // matching get WRITTEN to Firestore — but the returned `places`
-  // array is the FULL store, used downstream for the catalogue
-  // rebuild so the catalogue reflects total state, not just deltas.
-  const { uploaded, places } = await syncStoreToFirestore(storePath, {
+  // To keep the catalogue and place_types index coherent with the
+  // actual Firestore state — not with the GHA cache — we now read
+  // back fresh from Firestore after the writes complete and feed
+  // that into both downstream writers. One listAllPlaces() call is
+  // shared across both index builds so we don't pay the read twice.
+  //
+  // Cost: ~3,500 reads per sync × 4 syncs/day = ~14k reads/day,
+  // comfortably under the 50k/day free tier ceiling. The previous
+  // "use local array" optimization saved this read but at the cost
+  // of catalogue staleness whenever Firestore was touched outside
+  // the cron flow.
+  const { uploaded } = await syncStoreToFirestore(storePath, {
     snapshotHistory: !!args.snapshots,
     touchedRunId,
   });
   console.log(`✓ ${uploaded} places synced to Firestore`);
 
-  // Refresh the derived `meta/place_types` index. We pass the local
-  // places array via `from:` so writePlaceTypesIndex doesn't re-fetch
-  // from Firestore — its `from ?? listAllPlaces()` fallback would
-  // otherwise eat 3,600+ reads on every sync.
   if (!args['skip-index']) {
+    console.log('◆ reading places from Firestore for index rebuild');
+    const places = await listAllPlaces();
+    console.log(`  ${places.length} places loaded from Firestore`);
+
+    // Refresh the derived `meta/place_types` index using the fresh
+    // Firestore snapshot, not the local cache.
     console.log('◆ refreshing meta/place_types index');
     const idx = await writePlaceTypesIndex({ from: places });
     console.log(
       `✓ meta/place_types updated — ${idx.type_count} distinct types across ${idx.total_places} places`
     );
-  }
 
-  // Build + write the bucketed catalogue (`catalogue_buckets/*` +
-  // `catalogue_meta/index`). Mobile's home / category / list views
-  // read from this; the heavy `places/*` collection becomes a
-  // detail-page-only concern. Same flag gates this as the
-  // place_types refresh so a debug `--skip-index` run skips both.
-  // Uses the same in-memory `places` array — no fresh Firestore reads.
-  if (!args['skip-index']) {
+    // Build + write the bucketed catalogue from the same fresh
+    // snapshot. Wipes existing catalogue_buckets/* and rewrites
+    // — guarantees the catalogue mirrors places/ exactly, so any
+    // backfill / manual cleanup that touched Firestore between
+    // cron runs survives the rebuild.
     console.log('◆ refreshing catalogue (buckets + meta/index)');
     const catalogue = buildCatalogue(places);
     const result = await writeCatalogue(catalogue);
