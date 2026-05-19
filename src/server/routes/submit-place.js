@@ -29,6 +29,7 @@ import { mergePlace, applyScrape } from '../../pipeline/normalize.js';
 import { classify } from '../../classifier/index.js';
 import { isAccepted } from '../../parsers/scoring.js';
 import { mainCategoryForSub } from '../../catalogue/main-of.js';
+import { getFirestore } from '../../pipeline/firestore.js';
 
 /// Per-user rate limit. Soft cap to prevent runaway scripts /
 /// accidental flooding. 10/day per uid.
@@ -40,27 +41,14 @@ const DAILY_SUBMIT_LIMIT = 10;
 /// borderline cases than auto-publish them.
 const AUTO_ADD_CONFIDENCE = 0.7;
 
-let _dbPromise = null;
-
-/// Lazy-init Firestore admin client (reuses pipeline/firestore.js's
-/// connection setup pattern — see comments there). One client per
-/// process.
-async function getDb() {
-  if (_dbPromise) return _dbPromise;
-  _dbPromise = (async () => {
-    const admin = await import('firebase-admin');
-    if (!admin.default.apps.length) {
-      admin.default.initializeApp({
-        credential: admin.default.credential.applicationDefault(),
-        projectId: process.env.FIRESTORE_PROJECT,
-      });
-    }
-    const db = admin.default.firestore();
-    db.settings({ ignoreUndefinedProperties: true });
-    return db;
-  })();
-  return _dbPromise;
-}
+// Uses the shared Firestore client from pipeline/firestore.js. That
+// module owns the single `settings({ ignoreUndefinedProperties: true })`
+// call — calling settings() from here would throw because Firestore
+// only allows ONE settings() call per process. Previously this file
+// (and every other handler) had its own getDb() with its own
+// settings() call, which crashed under load when more than one
+// handler had to talk to Firestore.
+const getDb = getFirestore;
 
 /// Check the submitter's rate limit. Returns the current count
 /// (after this would-be submission would be added — i.e. the value

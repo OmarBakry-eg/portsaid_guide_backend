@@ -26,7 +26,14 @@ import { existsSync } from 'node:fs';
 
 let _db = null;
 
-async function getFirestore() {
+/// Single shared Firestore admin client for the entire server process.
+/// Other modules MUST import this rather than calling
+/// `admin.firestore()` themselves — `admin.firestore()` returns a
+/// singleton, and `settings()` can only be called once per process
+/// (a second call throws "Firestore has already been initialized").
+/// This function guards the settings() call behind `weInitialized`
+/// so callers don't accidentally fire it twice.
+export async function getFirestore() {
   if (_db) return _db;
   const projectId = process.env.FIRESTORE_PROJECT;
   if (!projectId) throw new Error('Set FIRESTORE_PROJECT env var (e.g. port-said-guide)');

@@ -3,24 +3,12 @@
 // → Writes place_reports/{id} and emails the admin.
 
 import { sendReportEmail } from '../email.js';
+import { getFirestore } from '../../pipeline/firestore.js';
 
-let _dbPromise = null;
-async function getDb() {
-  if (_dbPromise) return _dbPromise;
-  _dbPromise = (async () => {
-    const admin = await import('firebase-admin');
-    if (!admin.default.apps.length) {
-      admin.default.initializeApp({
-        credential: admin.default.credential.applicationDefault(),
-        projectId: process.env.FIRESTORE_PROJECT,
-      });
-    }
-    const db = admin.default.firestore();
-    db.settings({ ignoreUndefinedProperties: true });
-    return db;
-  })();
-  return _dbPromise;
-}
+// Shared Firestore client. pipeline/firestore.js owns the
+// settings({ ignoreUndefinedProperties: true }) call — calling it
+// twice in one process throws "Firestore has already been initialized".
+const getDb = getFirestore;
 
 const VALID_REASONS = new Set([
   'inaccurate_info',

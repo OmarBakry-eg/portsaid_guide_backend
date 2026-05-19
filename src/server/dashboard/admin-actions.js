@@ -26,24 +26,13 @@ import { sendSubmissionDecisionEmail } from '../email.js';
 //     status updates. (Rare path; admin should use a separate
 //     "delete place" tool for actual catalogue removal.)
 
-let _dbPromise = null;
+import { getFirestore } from '../../pipeline/firestore.js';
 
-async function getDb() {
-  if (_dbPromise) return _dbPromise;
-  _dbPromise = (async () => {
-    const admin = await import('firebase-admin');
-    if (!admin.default.apps.length) {
-      admin.default.initializeApp({
-        credential: admin.default.credential.applicationDefault(),
-        projectId: process.env.FIRESTORE_PROJECT,
-      });
-    }
-    const db = admin.default.firestore();
-    db.settings({ ignoreUndefinedProperties: true });
-    return db;
-  })();
-  return _dbPromise;
-}
+// Shared Firestore client — settings() is owned by pipeline/firestore.js.
+// Calling settings() twice in a process throws "Firestore has already
+// been initialized" (the bug we used to hit on /omar-dash when this
+// file ran AFTER something else had already configured Firestore).
+const getDb = getFirestore;
 
 /// List submissions for a given status, newest-first.
 export async function listSubmissions({ status, limit = 100 }) {
