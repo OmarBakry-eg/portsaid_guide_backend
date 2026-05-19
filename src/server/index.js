@@ -27,6 +27,7 @@ import {
 import { buildCatalogue } from '../catalogue/bucket.js';
 import { requireAuth } from './middleware/firebase-auth.js';
 import { makeSubmitPlaceHandler } from './routes/submit-place.js';
+import { mountDashboard } from './dashboard/index.js';
 
 const STORE_PATH = new URL('../../data/places.json', import.meta.url).pathname;
 const REVIEWS_PER_PAGE = 8;
@@ -735,6 +736,12 @@ app.get('/catalogue', async (req, res) => {
 //   - rate_limited: > 10 submissions in 24h for this user
 // See src/server/routes/submit-place.js for the full flow.
 app.post('/places/submit', requireAuth(), makeSubmitPlaceHandler());
+
+// ----- /omar-dash — server-rendered admin dashboard (basic auth) ------
+// Mounts GET /omar-dash + GET/POST /omar-dash/api/* routes for managing
+// user-submitted places. Credentials are env-overridable; default
+// matches the product spec (omarsalembakry1@gmail.com / 123Omar#).
+mountDashboard(app);
 
 app.get('/healthz', async (_req, res) => {
   const store = await loadStore();
