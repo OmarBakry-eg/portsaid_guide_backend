@@ -83,7 +83,12 @@ jobs:
           # the scraper step, so cadence_hours is ignored.
           ONLY="${{ github.event.inputs.categories }}"
           if [ -z "$ONLY" ]; then
-            ONLY="restaurant,coffee,pharmacy,hospital,hotel,supermarket,gas-station,bank,mosque,beach,clothing-men,clothing-women,clothing-kids,shoe-store,candy-store,gift-shop,toy-store,bookstore,florist,jewelry,stationery,gym,cinema,car-wash,car-rental"
+            # Default rotation. Includes the entertainment additions
+            # (amusement-park, water-park, playground, arcade) so the
+            # Outdoors & Leisure main page surfaces family-friendly
+            # destinations alongside the existing beach/park/cinema/gym
+            # tabs.
+            ONLY="restaurant,coffee,pharmacy,hospital,hotel,supermarket,gas-station,bank,mosque,beach,clothing-men,clothing-women,clothing-kids,shoe-store,candy-store,gift-shop,toy-store,bookstore,florist,jewelry,stationery,gym,cinema,car-wash,car-rental,amusement-park,water-park,playground,arcade"
           fi
           echo "only=$ONLY" >> "$GITHUB_OUTPUT"
 

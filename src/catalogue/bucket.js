@@ -58,7 +58,10 @@ export const MAIN_CATEGORIES = Object.freeze([
   { slug: 'finance', subSlugs: ['bank', 'atm', 'money-exchange'] },
   {
     slug: 'leisure',
-    subSlugs: ['beach', 'park', 'cinema', 'gym', 'tourist-attr'],
+    subSlugs: [
+      'beach', 'park', 'cinema', 'gym', 'tourist-attr',
+      'amusement-park', 'water-park', 'playground', 'arcade',
+    ],
   },
   { slug: 'faith', subSlugs: ['mosque', 'church'] },
   {

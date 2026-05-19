@@ -34,6 +34,7 @@ export const KNOWN_SLUGS = Object.freeze([
   'mosque', 'church',
   // Entertainment & recreation
   'beach', 'park', 'cinema', 'gym', 'tourist-attr',
+  'amusement-park', 'water-park', 'playground', 'arcade',
   // Education
   'school', 'university', 'library',
   // Government
