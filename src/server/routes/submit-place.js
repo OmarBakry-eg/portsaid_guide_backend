@@ -135,7 +135,46 @@ async function recordSubmission(db, payload) {
 }
 
 export function makeSubmitPlaceHandler() {
-  return async function submitPlace(req, res) {
+  // Wrap the real handler so any thrown error becomes a structured
+  // JSON response instead of Express's generic 500 HTML. Without
+  // this, Firestore quota exhaustion / scraper timeouts / etc. all
+  // came back to the mobile as "HTTP 500" — totally opaque to the
+  // user. Now they see the actual reason ("Quota exceeded — try
+  // again tomorrow.", "Scrape timed out.", etc.).
+  return async function submitPlaceWrapped(req, res) {
+    try {
+      await submitPlace(req, res);
+    } catch (e) {
+      console.error(
+        '[submit-place] uid=', req.user?.uid,
+        'url=', req.body?.url,
+        '→', e.stack || e
+      );
+      if (res.headersSent) return;
+      // Recognise Firestore's RESOURCE_EXHAUSTED code so we can return
+      // a friendly message + 503 Service Unavailable (the right status
+      // for a temporary backend dependency limit, not a 500).
+      const isQuota =
+          e?.code === 8 ||
+          /RESOURCE_EXHAUSTED|Quota exceeded/i.test(e?.message || '');
+      if (isQuota) {
+        return res.status(503).json({
+          outcome: 'error',
+          reason:
+            'Submissions are temporarily paused — our daily database read limit has been hit. Please try again in a few hours.',
+          retry_after_hours: 24,
+        });
+      }
+      return res.status(500).json({
+        outcome: 'error',
+        reason:
+            'Submission failed. ' + (e.message || 'Unknown server error.'),
+      });
+    }
+  };
+}
+
+async function submitPlace(req, res) {
     const uid = req.user?.uid;
     if (!uid) {
       return res.status(401).json({ error: 'unauthenticated' });
@@ -349,5 +388,4 @@ export function makeSubmitPlaceHandler() {
       breadcrumb: breadcrumbFor(merged),
       submission_id: submissionId,
     });
-  };
 }
