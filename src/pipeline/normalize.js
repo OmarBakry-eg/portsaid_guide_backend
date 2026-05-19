@@ -18,12 +18,29 @@ export function mergePlace(prev, fresh, { now, scrapeRunId, category, anchorId }
   const previous_rating = prev?.rating;
   const previous_reviews = prev?.reviews;
 
-  // Categories list — the same place often surfaces under multiple queries
-  // (e.g. a fish restaurant under both "restaurant" and "fish restaurant").
-  // NOTE: this is the *pre-classification* slug set. The classifier may
-  // overwrite this in applyScrape based on the place's actual identity.
+  // Preserve previously-classified source_categories verbatim. We do NOT
+  // add the current query's slug here — the classifier owns
+  // source_categories authoritatively in applyScrape, and any "add the
+  // queried slug as a pre-classification placeholder" logic here would
+  // be a regression trap:
+  //
+  //   Bug we removed: cron scrapes "cinema", Google returns Some Clinic
+  //   (low-ranked but in top-N at this anchor). mergePlace used to add
+  //   'cinema' to source_categories pre-classification. If the place's
+  //   identifying signature (title/type/etc.) was unchanged since the
+  //   last classification, needsReclassification returned false and the
+  //   strict classifier was SKIPPED. The 'cinema' tag persisted into
+  //   Firestore — clinics in the Cinema tab, supermarkets in the Bank
+  //   tab, etc. Same shape for every category.
+  //
+  // After this fix:
+  //   - New place (no prev): categories = [], classifier WILL run
+  //     (signature mismatch), sets the right source_categories.
+  //   - Old place, identity changed: classifier WILL run, replaces
+  //     source_categories cleanly.
+  //   - Old place, identity unchanged: classifier skipped, source_-
+  //     categories stays at prev value. No queried-slug pollution.
   const categories = new Set(prev?.source_categories ?? []);
-  categories.add(category);
 
   const anchors = new Set(prev?.source_anchors ?? []);
   anchors.add(anchorId);

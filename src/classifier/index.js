@@ -225,9 +225,15 @@ export function computeSourceCategories({ primary, fit, queriedSlug, confidence 
 ///       source_categories regardless of confidence; pruned
 ///       LOOSE_NEIGHBORS; rewritten LLM prompt; ATTRIBUTE_SURFACING
 ///       removed. Bumped 2026-05.
+///   3 — mergePlace no longer pre-tags places with the queried slug
+///       (was the source of cinema/bank tab regressions when the
+///       signature-cache skipped re-classification). Bumping the
+///       version forces one round of clean re-classification across
+///       every scraped place on the next cron, scrubbing any
+///       lingering wrong-tab tags written before the mergePlace fix.
 export function computeSignature(place) {
   const payload = JSON.stringify({
-    v: 2,
+    v: 3,
     title: place.title || '',
     type: place.type || '',
     types: Array.isArray(place.types) ? place.types : [],
