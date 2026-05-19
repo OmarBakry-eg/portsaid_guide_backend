@@ -26,6 +26,13 @@ import {
   rejectSubmission,
   listSubmissions,
 } from './admin-actions.js';
+import {
+  listPlaces,
+  listUsers,
+  listReports,
+  resolveReport,
+  getStats,
+} from './admin-queries.js';
 import { renderDashboardHtml } from './views/dashboard-html.js';
 
 /// Admin credentials. These match what the user specified in the
@@ -100,6 +107,68 @@ export function mountDashboard(app) {
       }
     }
   );
+
+  // ── Phase E: places / users / reports / stats endpoints ─────────────
+
+  // GET /omar-dash/api/places?main=&sub=&search=&limit=
+  app.get('/omar-dash/api/places', gate, async (req, res) => {
+    try {
+      const items = await listPlaces({
+        mainSlug: req.query.main?.toString(),
+        subSlug: req.query.sub?.toString(),
+        search: req.query.search?.toString(),
+        limit: Math.min(parseInt(req.query.limit || '100', 10), 500),
+      });
+      res.json({ ok: true, count: items.length, items });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // GET /omar-dash/api/users?limit=
+  app.get('/omar-dash/api/users', gate, async (req, res) => {
+    try {
+      const items = await listUsers({
+        limit: Math.min(parseInt(req.query.limit || '100', 10), 500),
+      });
+      res.json({ ok: true, count: items.length, items });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // GET /omar-dash/api/reports?status=open
+  app.get('/omar-dash/api/reports', gate, async (req, res) => {
+    try {
+      const items = await listReports({
+        status: (req.query.status || 'open').toString(),
+        limit: Math.min(parseInt(req.query.limit || '100', 10), 500),
+      });
+      res.json({ ok: true, count: items.length, items });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // POST /omar-dash/api/reports/:id/resolve
+  app.post('/omar-dash/api/reports/:id/resolve', gate, async (req, res) => {
+    try {
+      const out = await resolveReport(req.params.id);
+      res.json({ ok: true, ...out });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // GET /omar-dash/api/stats
+  app.get('/omar-dash/api/stats', gate, async (_req, res) => {
+    try {
+      const stats = await getStats();
+      res.json({ ok: true, ...stats });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
 
   console.log(
     `◆ /omar-dash mounted (admin user: ${ADMIN_EMAIL.replace(/(.{2}).+(@.+)/, '$1***$2')})`
