@@ -1,361 +1,642 @@
-// Server-rendered SPA shell for /omar-dash. Five views:
-//   - Submissions   (pending queue + status filter)
-//   - Places        (all catalogue places, filterable)
-//   - Users         (signed-in users, submission count)
-//   - Reports       (open issues users flagged)
-//   - Stats         (totals + breakdown)
+// Server-rendered SPA shell for /omar-dash. No external CSS framework
+// — Tailwind's Play CDN uses runtime eval() which CSP blocks. All
+// styling is inline CSS in the <style> block; layout primitives are
+// semantic classes plus a handful of utility-style helpers
+// (.flex, .col, .gap-N, etc.) defined ourselves.
 //
-// Zero-build: Tailwind CDN + vanilla JS. The single HTML shell ships
-// every section's markup hidden by default; the client toggles
-// visibility and fetches the appropriate JSON endpoint on tab change.
+// Five views: Submissions / Places / Users / Reports / Stats. Side
+// nav on desktop, horizontal pill bar on mobile via a single media
+// query.
 
 export function renderDashboardHtml() {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PortSaid Guide — Admin</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <style>
-    body { font-family: 'Inter', system-ui, sans-serif; }
-    .aurora {
-      position: fixed; inset: 0; z-index: -1; overflow: hidden;
-      background: radial-gradient(circle at 20% 30%, rgba(255, 140, 90, 0.18), transparent 50%),
-                  radial-gradient(circle at 80% 60%, rgba(80, 180, 220, 0.18), transparent 50%),
-                  radial-gradient(circle at 50% 100%, rgba(200, 100, 220, 0.12), transparent 60%),
-                  #0a0e1a;
-    }
-    .glass { background: rgba(255, 255, 255, 0.04); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.08); }
-    .glass-strong { background: rgba(255, 255, 255, 0.06); backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px); border: 1px solid rgba(255, 255, 255, 0.10); }
-    .pill { padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; display: inline-block; }
-    .pill-pending  { background: rgba(255, 200, 50, 0.18); color: #ffd060; }
-    .pill-approved { background: rgba(80, 220, 130, 0.18); color: #6cf09a; }
-    .pill-rejected { background: rgba(255, 110, 100, 0.18); color: #ff8a82; }
-    .pill-duplicate{ background: rgba(120, 160, 255, 0.18); color: #97b6ff; }
-    .pill-open     { background: rgba(255, 110, 100, 0.18); color: #ff8a82; }
-    .pill-resolved { background: rgba(80, 220, 130, 0.18); color: #6cf09a; }
-    .pill-ghost    { background: rgba(255, 255, 255, 0.10); color: rgba(255, 255, 255, 0.70); }
-    .btn-primary { background: linear-gradient(135deg, #ff9555, #ff6b9d); color: white; padding: 8px 18px; border-radius: 10px; font-weight: 700; font-size: 13px; transition: transform 0.15s; }
-    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(255, 130, 130, 0.30); }
-    .btn-ghost { background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.85); padding: 8px 16px; border-radius: 10px; font-weight: 600; font-size: 13px; border: 1px solid rgba(255, 255, 255, 0.10); }
-    .btn-ghost:hover { background: rgba(255, 255, 255, 0.10); }
-    .btn-danger { background: rgba(255, 70, 70, 0.16); color: #ff8a82; padding: 8px 16px; border-radius: 10px; font-weight: 700; font-size: 13px; border: 1px solid rgba(255, 100, 100, 0.30); }
-    .btn-danger:hover { background: rgba(255, 70, 70, 0.22); }
-    a.url { color: #97b6ff; text-decoration: none; word-break: break-all; }
-    a.url:hover { text-decoration: underline; }
-    .scroll-hide::-webkit-scrollbar { display: none; }
-    .nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 10px; color: rgba(255,255,255,0.7); font-weight: 600; font-size: 14px; cursor: pointer; transition: background 0.15s; }
-    .nav-item:hover { background: rgba(255,255,255,0.06); color: white; }
-    .nav-item.active { background: rgba(255, 149, 85, 0.18); color: white; border: 1px solid rgba(255, 149, 85, 0.40); }
-    .stat-card { padding: 18px 20px; border-radius: 16px; }
-    .stat-num { font-size: 28px; font-weight: 800; line-height: 1; background: linear-gradient(135deg, #ff9555, #ff6b9d); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-    table.tbl { width: 100%; border-collapse: collapse; }
-    table.tbl th { padding: 10px; text-align: left; font-size: 11px; color: rgba(255,255,255,0.5); text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid rgba(255,255,255,0.08); }
-    table.tbl td { padding: 12px 10px; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.05); }
-    table.tbl tr:hover td { background: rgba(255,255,255,0.03); }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PortSaid Guide — Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  /* ── Reset + base ───────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    color: white;
+    background: #0a0e1a;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; text-decoration: none; }
+  button { font: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+  input { font: inherit; color: white; }
+  input::placeholder { color: rgba(255,255,255,0.4); }
+  input:focus { outline: 1px solid rgba(255,149,85,0.5); }
+  table { border-collapse: collapse; width: 100%; }
+
+  /* ── Background aurora (matches mobile app) ─────────────────── */
+  .aurora {
+    position: fixed; inset: 0; z-index: -1; overflow: hidden;
+    background:
+      radial-gradient(circle at 20% 30%, rgba(255, 140, 90, 0.18), transparent 50%),
+      radial-gradient(circle at 80% 60%, rgba(80, 180, 220, 0.18), transparent 50%),
+      radial-gradient(circle at 50% 100%, rgba(200, 100, 220, 0.12), transparent 60%),
+      #0a0e1a;
+  }
+
+  /* ── Layout container + responsive sidebar ──────────────────── */
+  .container { max-width: 1280px; margin: 0 auto; padding: 24px 16px; }
+  .header {
+    display: flex; flex-direction: column; gap: 16px;
+    margin-bottom: 24px;
+  }
+  .header h1 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.5px; }
+  .header h1 .grad {
+    background: linear-gradient(135deg, #ff9555, #ff6b9d);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .header .sub { color: rgba(255,255,255,0.5); font-size: 13px; margin-top: 4px; }
+  .layout { display: flex; flex-direction: column; gap: 24px; }
+  .sidebar {
+    flex-shrink: 0;
+    display: flex; flex-direction: row; gap: 4px;
+    overflow-x: auto;
+    padding: 6px;
+  }
+  .sidebar::-webkit-scrollbar { display: none; }
+  .sidebar { -ms-overflow-style: none; scrollbar-width: none; }
+  .main-content { flex: 1; min-width: 0; }
+  @media (min-width: 880px) {
+    .container { padding: 32px 32px; }
+    .header { flex-direction: row; align-items: center; justify-content: space-between; }
+    .header h1 { font-size: 28px; }
+    .layout { flex-direction: row; }
+    .sidebar { flex-direction: column; width: 220px; position: sticky; top: 16px; }
+  }
+
+  /* ── Glass surfaces ─────────────────────────────────────────── */
+  .glass {
+    background: rgba(255,255,255,0.04);
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+  }
+  .glass-strong {
+    background: rgba(255,255,255,0.06);
+    backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 16px;
+  }
+
+  /* ── Side nav items ─────────────────────────────────────────── */
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; border-radius: 10px;
+    color: rgba(255,255,255,0.7); font-weight: 600; font-size: 14px;
+    cursor: pointer; transition: background 0.15s, color 0.15s;
+    white-space: nowrap; border: 1px solid transparent;
+  }
+  .nav-item:hover { background: rgba(255,255,255,0.06); color: white; }
+  .nav-item.active {
+    background: rgba(255, 149, 85, 0.18);
+    color: white;
+    border-color: rgba(255, 149, 85, 0.40);
+  }
+
+  /* ── Buttons ────────────────────────────────────────────────── */
+  .btn { padding: 8px 16px; border-radius: 10px; font-weight: 600; font-size: 13px; transition: background 0.15s, transform 0.15s, box-shadow 0.15s; }
+  .btn-primary {
+    background: linear-gradient(135deg, #ff9555, #ff6b9d);
+    color: white; font-weight: 700;
+  }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(255,130,130,0.30); }
+  .btn-ghost {
+    background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.85);
+    border: 1px solid rgba(255,255,255,0.10);
+  }
+  .btn-ghost:hover { background: rgba(255,255,255,0.10); }
+  .btn-danger {
+    background: rgba(255,70,70,0.16); color: #ff8a82;
+    border: 1px solid rgba(255,100,100,0.30); font-weight: 700;
+  }
+  .btn-danger:hover { background: rgba(255,70,70,0.22); }
+  .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+  /* ── Tabs (used inside views) ───────────────────────────────── */
+  .tab-row { display: flex; gap: 8px; padding: 8px; margin-bottom: 16px; overflow-x: auto; }
+  .tab-row::-webkit-scrollbar { display: none; }
+  .tab-row { -ms-overflow-style: none; scrollbar-width: none; }
+  .tab { white-space: nowrap; }
+  .tab.active {
+    background: rgba(255, 149, 85, 0.18) !important;
+    border-color: rgba(255, 149, 85, 0.50) !important;
+  }
+
+  /* ── Pills ──────────────────────────────────────────────────── */
+  .pill {
+    display: inline-block;
+    padding: 2px 10px; border-radius: 999px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+  }
+  .pill-pending   { background: rgba(255,200,50,0.18); color: #ffd060; }
+  .pill-approved  { background: rgba(80,220,130,0.18); color: #6cf09a; }
+  .pill-rejected  { background: rgba(255,110,100,0.18); color: #ff8a82; }
+  .pill-duplicate { background: rgba(120,160,255,0.18); color: #97b6ff; }
+  .pill-open      { background: rgba(255,110,100,0.18); color: #ff8a82; }
+  .pill-resolved  { background: rgba(80,220,130,0.18); color: #6cf09a; }
+  .pill-ghost     { background: rgba(255,255,255,0.10); color: rgba(255,255,255,0.70); }
+
+  /* ── Cards (list items) ─────────────────────────────────────── */
+  .card { padding: 20px; }
+  .card + .card { margin-top: 12px; }
+  .card .head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  .card .title { font-size: 16px; font-weight: 700; margin: 8px 0 0; }
+  .card .meta { font-size: 11px; color: rgba(255,255,255,0.5); }
+  .card .body { font-size: 12px; margin-top: 8px; color: rgba(255,255,255,0.7); }
+  .card .url { color: #97b6ff; word-break: break-all; }
+  .card .url:hover { text-decoration: underline; }
+  .card .footer { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .ai-block { margin-top: 12px; font-size: 12px; color: rgba(255,255,255,0.5); }
+  .ai-block .reasoning { color: rgba(255,255,255,0.4); font-style: italic; margin-top: 4px; }
+  .note-block { margin-top: 8px; font-size: 12px; color: rgba(255,255,255,0.5); }
+
+  /* ── Table ──────────────────────────────────────────────────── */
+  .tbl-wrap { overflow-x: auto; }
+  .tbl { width: 100%; }
+  .tbl th {
+    padding: 12px; text-align: left;
+    font-size: 11px; color: rgba(255,255,255,0.5);
+    text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .tbl td {
+    padding: 12px;
+    font-size: 13px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+  .tbl tr:hover td { background: rgba(255,255,255,0.03); }
+  .tbl .place-id { color: rgba(255,255,255,0.4); font-size: 11px; font-family: ui-monospace, monospace; margin-top: 2px; }
+  .tbl .avatar { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; margin-right: 8px; object-fit: cover; }
+  .tbl .avatar-placeholder { display: inline-block; width: 28px; height: 28px; border-radius: 50%; background: rgba(255,255,255,0.10); vertical-align: middle; margin-right: 8px; }
+
+  /* ── Filters row ────────────────────────────────────────────── */
+  .filters {
+    padding: 16px; margin-bottom: 16px;
+    display: flex; flex-wrap: wrap; gap: 8px;
+  }
+  .filters input {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    min-width: 180px;
+  }
+  .filters .grow { flex: 1; }
+  .filters .hint { width: 100%; font-size: 11px; color: rgba(255,255,255,0.4); margin-top: 4px; }
+
+  /* ── Stats grid + cards ─────────────────────────────────────── */
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+  }
+  @media (min-width: 720px) {
+    .stat-grid { grid-template-columns: repeat(4, 1fr); }
+  }
+  .stat-card { padding: 18px 20px; }
+  .stat-label {
+    font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: rgba(255,255,255,0.5);
+  }
+  .stat-num {
+    margin-top: 8px;
+    font-size: 28px; font-weight: 800; line-height: 1;
+    background: linear-gradient(135deg, #ff9555, #ff6b9d);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .stat-detail { padding: 20px; margin-top: 16px; }
+  .stat-detail h3 { margin: 0 0 12px; font-size: 15px; font-weight: 700; }
+  .stat-detail .row {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;
+  }
+  @media (min-width: 600px) {
+    .stat-detail .row.cols-4 { grid-template-columns: repeat(4, 1fr); }
+  }
+  .stat-detail .item { font-size: 12px; color: rgba(255,255,255,0.6); }
+  .stat-detail .item .big { display: block; font-size: 22px; font-weight: 800; margin-top: 4px; }
+  .stat-detail .big-yellow { color: #ffd060; }
+  .stat-detail .big-green { color: #6cf09a; }
+  .stat-detail .big-red { color: #ff8a82; }
+  .stat-detail .big-blue { color: #97b6ff; }
+
+  /* ── Empty / error states ───────────────────────────────────── */
+  .empty {
+    padding: 64px 24px; text-align: center;
+    color: rgba(255,255,255,0.5); font-size: 14px;
+  }
+  .empty-icon { font-size: 40px; margin-bottom: 12px; opacity: 0.5; }
+  .err { color: #ff8a82; padding: 16px; font-size: 13px; }
+
+  /* ── Footer ─────────────────────────────────────────────────── */
+  footer.app-footer {
+    margin-top: 48px; padding-bottom: 24px;
+    text-align: center; font-size: 11px;
+    color: rgba(255,255,255,0.3);
+  }
+
+  /* ── View toggling ──────────────────────────────────────────── */
+  [data-view-section] { display: none; }
+  [data-view-section].active { display: block; }
+</style>
 </head>
-<body class="text-white">
-  <div class="aurora"></div>
+<body>
+<div class="aurora"></div>
 
-  <div class="max-w-7xl mx-auto px-4 md:px-6 py-6">
-    <header class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
-      <div>
-        <h1 class="text-2xl md:text-3xl font-extrabold tracking-tight">
-          <span style="background: linear-gradient(135deg, #ff9555, #ff6b9d); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">PortSaid Guide</span>
-          <span class="text-white/70">— Admin</span>
-        </h1>
-        <p class="text-sm text-white/50 mt-1">Manage submissions, places, users, and reports.</p>
-      </div>
-      <button id="refreshBtn" class="btn-ghost flex items-center gap-2">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
-        Refresh
-      </button>
-    </header>
-
-    <div class="flex flex-col md:flex-row gap-6">
-      <!-- Side nav -->
-      <aside class="md:w-56 flex-shrink-0">
-        <div class="glass rounded-2xl p-2 sticky top-4 flex md:flex-col gap-1 overflow-x-auto scroll-hide">
-          <div class="nav-item active" data-view="submissions"><span>📋</span><span>Submissions</span></div>
-          <div class="nav-item" data-view="places"><span>🗺️</span><span>All places</span></div>
-          <div class="nav-item" data-view="users"><span>👤</span><span>Users</span></div>
-          <div class="nav-item" data-view="reports"><span>🚩</span><span>Reports</span></div>
-          <div class="nav-item" data-view="stats"><span>📊</span><span>Stats</span></div>
-        </div>
-      </aside>
-
-      <!-- Main content -->
-      <main class="flex-1 min-w-0">
-        <!-- Submissions view -->
-        <section data-view-section="submissions">
-          <div class="glass rounded-2xl p-2 mb-4 flex gap-2 overflow-x-auto scroll-hide">
-            <button data-sub-status="pending"   class="sub-tab btn-ghost whitespace-nowrap">Pending <span id="count-pending" class="opacity-60 text-xs ml-1"></span></button>
-            <button data-sub-status="approved"  class="sub-tab btn-ghost whitespace-nowrap">Approved</button>
-            <button data-sub-status="rejected"  class="sub-tab btn-ghost whitespace-nowrap">Rejected</button>
-            <button data-sub-status="duplicate" class="sub-tab btn-ghost whitespace-nowrap">Duplicates</button>
-            <button data-sub-status="all"       class="sub-tab btn-ghost whitespace-nowrap">All</button>
-          </div>
-          <div id="submissions-list" class="space-y-3"></div>
-        </section>
-
-        <!-- Places view -->
-        <section data-view-section="places" style="display:none">
-          <div class="glass-strong rounded-2xl p-4 mb-4">
-            <div class="flex flex-wrap gap-2">
-              <input id="places-search" placeholder="Search title…" class="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm flex-1 min-w-[200px]" />
-              <input id="places-main" placeholder="main slug (food / shopping…)" class="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm w-[200px]" />
-              <input id="places-sub" placeholder="sub slug (coffee / bank…)" class="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm w-[200px]" />
-              <button id="places-search-btn" class="btn-primary">Search</button>
-            </div>
-            <p class="text-xs text-white/40 mt-2">Filtering 'main' surfaces all sub-slugs of that main. 'sub' is exact match.</p>
-          </div>
-          <div class="glass-strong rounded-2xl overflow-hidden">
-            <table class="tbl" id="places-table">
-              <thead>
-                <tr><th>Title</th><th>Type</th><th>Primary</th><th>Rating</th><th>Source</th></tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </section>
-
-        <!-- Users view -->
-        <section data-view-section="users" style="display:none">
-          <div class="glass-strong rounded-2xl overflow-hidden">
-            <table class="tbl" id="users-table">
-              <thead>
-                <tr><th>User</th><th>Email</th><th>Joined</th><th>Last login</th><th>Submissions</th></tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </section>
-
-        <!-- Reports view -->
-        <section data-view-section="reports" style="display:none">
-          <div class="glass rounded-2xl p-2 mb-4 flex gap-2 overflow-x-auto scroll-hide">
-            <button data-rep-status="open"     class="rep-tab btn-ghost whitespace-nowrap">Open</button>
-            <button data-rep-status="resolved" class="rep-tab btn-ghost whitespace-nowrap">Resolved</button>
-            <button data-rep-status="all"      class="rep-tab btn-ghost whitespace-nowrap">All</button>
-          </div>
-          <div id="reports-list" class="space-y-3"></div>
-        </section>
-
-        <!-- Stats view -->
-        <section data-view-section="stats" style="display:none">
-          <div id="stats-grid" class="grid grid-cols-2 md:grid-cols-4 gap-4"></div>
-          <div id="stats-detail" class="mt-6"></div>
-        </section>
-      </main>
+<div class="container">
+  <header class="header">
+    <div>
+      <h1><span class="grad">PortSaid Guide</span> <span style="color: rgba(255,255,255,0.7);">— Admin</span></h1>
+      <div class="sub">Manage submissions, places, users, and reports.</div>
     </div>
+    <button id="refreshBtn" class="btn btn-ghost" style="display: inline-flex; align-items: center; gap: 8px;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
+      Refresh
+    </button>
+  </header>
 
-    <footer class="mt-12 text-center text-xs text-white/30">PortSaid Guide admin — protected by basic auth.</footer>
+  <div class="layout">
+    <aside class="sidebar glass">
+      <div class="nav-item active" data-view="submissions"><span>📋</span><span>Submissions</span></div>
+      <div class="nav-item" data-view="places"><span>🗺️</span><span>All places</span></div>
+      <div class="nav-item" data-view="users"><span>👤</span><span>Users</span></div>
+      <div class="nav-item" data-view="reports"><span>🚩</span><span>Reports</span></div>
+      <div class="nav-item" data-view="stats"><span>📊</span><span>Stats</span></div>
+    </aside>
+
+    <main class="main-content">
+      <!-- Submissions -->
+      <section data-view-section="submissions" class="active">
+        <div class="tab-row glass">
+          <button data-sub-status="pending" class="tab btn btn-ghost">Pending <span id="count-pending" style="opacity:0.6;font-size:11px;margin-left:4px;"></span></button>
+          <button data-sub-status="approved" class="tab btn btn-ghost">Approved</button>
+          <button data-sub-status="rejected" class="tab btn btn-ghost">Rejected</button>
+          <button data-sub-status="duplicate" class="tab btn btn-ghost">Duplicates</button>
+          <button data-sub-status="all" class="tab btn btn-ghost">All</button>
+        </div>
+        <div id="submissions-list"></div>
+      </section>
+
+      <!-- Places -->
+      <section data-view-section="places">
+        <div class="filters glass-strong">
+          <input id="places-search" placeholder="Search title…" class="grow">
+          <input id="places-main" placeholder="main slug (food, shopping…)">
+          <input id="places-sub" placeholder="sub slug (coffee, bank…)">
+          <button id="places-search-btn" class="btn btn-primary">Search</button>
+          <div class="hint">'main' surfaces all sub-slugs of that main; 'sub' is exact match.</div>
+        </div>
+        <div class="glass-strong tbl-wrap">
+          <table class="tbl" id="places-table">
+            <thead><tr><th>Title</th><th>Type</th><th>Primary</th><th>Rating</th><th>Source</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Users -->
+      <section data-view-section="users">
+        <div class="glass-strong tbl-wrap">
+          <table class="tbl" id="users-table">
+            <thead><tr><th>User</th><th>Email</th><th>Joined</th><th>Last login</th><th>Submissions</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Reports -->
+      <section data-view-section="reports">
+        <div class="tab-row glass">
+          <button data-rep-status="open" class="tab btn btn-ghost">Open</button>
+          <button data-rep-status="resolved" class="tab btn btn-ghost">Resolved</button>
+          <button data-rep-status="all" class="tab btn btn-ghost">All</button>
+        </div>
+        <div id="reports-list"></div>
+      </section>
+
+      <!-- Stats -->
+      <section data-view-section="stats">
+        <div class="stat-grid" id="stats-grid"></div>
+        <div id="stats-detail"></div>
+      </section>
+    </main>
   </div>
 
-  <script>
-    const $ = (s, root) => (root || document).querySelector(s);
-    const $$ = (s, root) => Array.from((root || document).querySelectorAll(s));
+  <footer class="app-footer">PortSaid Guide admin — protected by basic auth.</footer>
+</div>
 
-    function escapeHtml(s) {
-      if (s == null) return '';
-      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
-    function fmtDate(iso) {
-      if (!iso) return '—';
-      const d = new Date(iso);
-      return d.toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
-    }
+<script>
+  // No external dependencies. All vanilla JS.
+  var $ = function(s, r) { return (r || document).querySelector(s); };
+  var $$ = function(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
 
-    let currentView = 'submissions';
-    let subStatus = 'pending';
-    let repStatus = 'open';
+  function escapeHtml(s) {
+    if (s == null) return '';
+    return String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function fmtDate(iso) {
+    if (!iso) return '—';
+    try {
+      return new Date(iso).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+    } catch (e) { return iso; }
+  }
 
-    function setView(view) {
-      currentView = view;
-      $$('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === view));
-      $$('[data-view-section]').forEach(s => s.style.display = s.dataset.viewSection === view ? '' : 'none');
-      load(view);
-    }
+  var currentView = 'submissions';
+  var subStatus = 'pending';
+  var repStatus = 'open';
 
-    function setSubStatus(s) {
-      subStatus = s;
-      $$('.sub-tab').forEach(t => {
-        t.style.background = t.dataset.subStatus === s ? 'rgba(255, 149, 85, 0.18)' : '';
-        t.style.borderColor = t.dataset.subStatus === s ? 'rgba(255, 149, 85, 0.50)' : '';
-      });
-      loadSubmissions();
-    }
+  function setView(view) {
+    currentView = view;
+    $$('.nav-item').forEach(function(n) {
+      n.classList.toggle('active', n.dataset.view === view);
+    });
+    $$('[data-view-section]').forEach(function(s) {
+      s.classList.toggle('active', s.dataset.viewSection === view);
+    });
+    load(view);
+  }
 
-    function setRepStatus(s) {
-      repStatus = s;
-      $$('.rep-tab').forEach(t => {
-        t.style.background = t.dataset.repStatus === s ? 'rgba(255, 149, 85, 0.18)' : '';
-        t.style.borderColor = t.dataset.repStatus === s ? 'rgba(255, 149, 85, 0.50)' : '';
-      });
-      loadReports();
-    }
+  function setSubStatus(s) {
+    subStatus = s;
+    $$('[data-sub-status]').forEach(function(t) {
+      t.classList.toggle('active', t.dataset.subStatus === s);
+    });
+    loadSubmissions();
+  }
 
-    function load(view) {
-      if (view === 'submissions') loadSubmissions();
-      else if (view === 'places') loadPlaces();
-      else if (view === 'users') loadUsers();
-      else if (view === 'reports') loadReports();
-      else if (view === 'stats') loadStats();
-    }
+  function setRepStatus(s) {
+    repStatus = s;
+    $$('[data-rep-status]').forEach(function(t) {
+      t.classList.toggle('active', t.dataset.repStatus === s);
+    });
+    loadReports();
+  }
 
-    // ── Submissions ─────────────────────────────────────────────
-    function submissionPill(s) {
-      return '<span class="pill pill-' + s + '">' + s.toUpperCase() + '</span>';
-    }
-    function renderSubmission(it) {
-      const v = it.ai_verdict || {};
-      const conf = typeof v.confidence === 'number' ? (v.confidence * 100).toFixed(0) + '%' : '—';
-      const aiBlock = it.ai_verdict
-        ? '<div class="mt-3 text-xs text-white/50 space-y-1">' +
-          '<div><span class="text-white/70">AI:</span> ' + escapeHtml(v.primary_slug || '—') + ' <span class="ml-2 text-white/40">conf: ' + conf + '</span></div>' +
-          (v.reasoning ? '<div class="text-white/40 italic">"' + escapeHtml(v.reasoning).slice(0, 220) + '"</div>' : '') +
-          '</div>'
-        : '';
-      const noteBlock = it.admin_note ? '<div class="mt-2 text-xs text-white/50"><span class="text-white/70">Note:</span> ' + escapeHtml(it.admin_note) + '</div>' : '';
-      const actions = it.status === 'pending'
-        ? '<div class="flex flex-wrap gap-2 mt-4"><button class="btn-primary approve-btn" data-id="' + it.id + '">Approve & add</button><button class="btn-danger reject-btn" data-id="' + it.id + '">Reject</button></div>'
-        : '<div class="mt-3 text-xs text-white/40">Resolved ' + fmtDate(it.resolved_at) + (it.resolved_by ? ' by ' + escapeHtml(it.resolved_by) : '') + '</div>';
-      return '<div class="glass-strong rounded-2xl p-5"><div class="flex items-start justify-between gap-3 mb-2"><div class="min-w-0 flex-1"><div class="flex items-center gap-3 flex-wrap">' + submissionPill(it.status) + '<span class="text-xs text-white/50">' + fmtDate(it.submitted_at) + '</span></div><h3 class="text-base md:text-lg font-bold mt-2 truncate">' + escapeHtml(it.extracted_title || '(no extracted title)') + '</h3>' + (it.extracted_place_id ? '<div class="text-xs text-white/50 mt-1 font-mono">place_id: ' + escapeHtml(it.extracted_place_id) + '</div>' : '') + '</div></div><div class="text-xs"><a class="url" href="' + escapeHtml(it.submitted_url) + '" target="_blank" rel="noopener">' + escapeHtml(it.submitted_url) + '</a></div>' + aiBlock + noteBlock + actions + '</div>';
-    }
-    async function loadSubmissions() {
-      const list = $('#submissions-list');
-      list.innerHTML = '<div class="text-white/40 p-4">Loading…</div>';
-      try {
-        const r = await fetch('/omar-dash/api/submissions?status=' + subStatus + '&limit=200', { credentials: 'same-origin' });
-        const b = await r.json();
+  function load(view) {
+    if (view === 'submissions') loadSubmissions();
+    else if (view === 'places') loadPlaces();
+    else if (view === 'users') loadUsers();
+    else if (view === 'reports') loadReports();
+    else if (view === 'stats') loadStats();
+  }
+
+  // ── Submissions ──
+  function renderSubmission(it) {
+    var v = it.ai_verdict || {};
+    var conf = typeof v.confidence === 'number' ? (v.confidence * 100).toFixed(0) + '%' : '—';
+    var aiBlock = it.ai_verdict
+      ? '<div class="ai-block"><div><span style="color:rgba(255,255,255,0.7);">AI:</span> ' +
+        escapeHtml(v.primary_slug || '—') +
+        ' <span style="margin-left:8px;color:rgba(255,255,255,0.4);">conf: ' + conf + '</span></div>' +
+        (v.reasoning ? '<div class="reasoning">"' + escapeHtml(v.reasoning).slice(0, 220) + '"</div>' : '') +
+        '</div>'
+      : '';
+    var noteBlock = it.admin_note
+      ? '<div class="note-block"><span style="color:rgba(255,255,255,0.7);">Note:</span> ' + escapeHtml(it.admin_note) + '</div>'
+      : '';
+    var actions = it.status === 'pending'
+      ? '<div class="card-footer" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;">' +
+        '<button class="btn btn-primary approve-btn" data-id="' + it.id + '">Approve & add</button>' +
+        '<button class="btn btn-danger reject-btn" data-id="' + it.id + '">Reject</button>' +
+        '</div>'
+      : '<div style="margin-top:12px;font-size:11px;color:rgba(255,255,255,0.4);">Resolved ' + fmtDate(it.resolved_at) +
+        (it.resolved_by ? ' by ' + escapeHtml(it.resolved_by) : '') + '</div>';
+    return '<div class="glass-strong card">' +
+      '<div class="head"><span class="pill pill-' + it.status + '">' + it.status.toUpperCase() + '</span>' +
+      '<span class="meta">' + fmtDate(it.submitted_at) + '</span></div>' +
+      '<h3 class="title">' + escapeHtml(it.extracted_title || '(no extracted title)') + '</h3>' +
+      (it.extracted_place_id
+        ? '<div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:4px;font-family:ui-monospace,monospace;">place_id: ' + escapeHtml(it.extracted_place_id) + '</div>'
+        : '') +
+      '<div style="margin-top:8px;font-size:12px;"><a class="url" href="' + escapeHtml(it.submitted_url) + '" target="_blank" rel="noopener">' + escapeHtml(it.submitted_url) + '</a></div>' +
+      aiBlock + noteBlock + actions +
+      '</div>';
+  }
+  function loadSubmissions() {
+    var list = $('#submissions-list');
+    list.innerHTML = '<div class="empty">Loading…</div>';
+    fetch('/omar-dash/api/submissions?status=' + subStatus + '&limit=200', { credentials: 'same-origin' })
+      .then(function(r) { return r.json(); })
+      .then(function(b) {
         if (!b.ok) throw new Error(b.error);
         if (subStatus === 'pending') $('#count-pending').textContent = '(' + b.count + ')';
-        list.innerHTML = b.items.length ? b.items.map(renderSubmission).join('') : '<div class="glass-strong rounded-2xl p-12 text-center text-white/50">Nothing here yet.</div>';
+        list.innerHTML = b.items.length
+          ? b.items.map(renderSubmission).join('')
+          : '<div class="glass-strong empty"><div class="empty-icon">📭</div>Nothing here yet.</div>';
         wireSubActions();
-      } catch (e) { list.innerHTML = '<div class="text-red-300 p-4">Error: ' + escapeHtml(e.message) + '</div>'; }
-    }
-    function wireSubActions() {
-      $$('.approve-btn').forEach(b => b.addEventListener('click', async () => {
-        const note = prompt('Optional note for this approval:') || '';
+      })
+      .catch(function(e) { list.innerHTML = '<div class="err">Error: ' + escapeHtml(e.message) + '</div>'; });
+  }
+  function wireSubActions() {
+    $$('.approve-btn').forEach(function(b) {
+      b.addEventListener('click', function() {
+        var note = prompt('Optional note for this approval:') || '';
         b.disabled = true; b.textContent = '…';
-        try {
-          const r = await fetch('/omar-dash/api/submissions/' + b.dataset.id + '/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note }), credentials: 'same-origin' });
-          const data = await r.json(); if (!data.ok) throw new Error(data.error);
-          loadSubmissions();
-        } catch (e) { alert('Approve failed: ' + e.message); b.disabled = false; b.textContent = 'Approve & add'; }
-      }));
-      $$('.reject-btn').forEach(b => b.addEventListener('click', async () => {
-        const reason = prompt('Reason for rejection (visible to submitter):');
+        fetch('/omar-dash/api/submissions/' + b.dataset.id + '/approve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ note: note }),
+          credentials: 'same-origin'
+        })
+          .then(function(r) { return r.json(); })
+          .then(function(d) { if (!d.ok) throw new Error(d.error); loadSubmissions(); })
+          .catch(function(e) { alert('Approve failed: ' + e.message); b.disabled = false; b.textContent = 'Approve & add'; });
+      });
+    });
+    $$('.reject-btn').forEach(function(b) {
+      b.addEventListener('click', function() {
+        var reason = prompt('Reason for rejection (visible to submitter):');
         if (!reason || !reason.trim()) return;
         b.disabled = true; b.textContent = '…';
-        try {
-          const r = await fetch('/omar-dash/api/submissions/' + b.dataset.id + '/reject', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }), credentials: 'same-origin' });
-          const data = await r.json(); if (!data.ok) throw new Error(data.error);
-          loadSubmissions();
-        } catch (e) { alert('Reject failed: ' + e.message); b.disabled = false; b.textContent = 'Reject'; }
-      }));
-    }
+        fetch('/omar-dash/api/submissions/' + b.dataset.id + '/reject', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: reason }),
+          credentials: 'same-origin'
+        })
+          .then(function(r) { return r.json(); })
+          .then(function(d) { if (!d.ok) throw new Error(d.error); loadSubmissions(); })
+          .catch(function(e) { alert('Reject failed: ' + e.message); b.disabled = false; b.textContent = 'Reject'; });
+      });
+    });
+  }
 
-    // ── Places ──────────────────────────────────────────────────
-    async function loadPlaces() {
-      const search = $('#places-search').value.trim();
-      const main = $('#places-main').value.trim();
-      const sub = $('#places-sub').value.trim();
-      const tbody = $('#places-table tbody');
-      tbody.innerHTML = '<tr><td colspan="5" class="text-white/40">Loading…</td></tr>';
-      const params = new URLSearchParams({ limit: '200' });
-      if (search) params.set('search', search);
-      if (main) params.set('main', main);
-      if (sub) params.set('sub', sub);
-      try {
-        const r = await fetch('/omar-dash/api/places?' + params.toString(), { credentials: 'same-origin' });
-        const b = await r.json();
+  // ── Places ──
+  function loadPlaces() {
+    var search = $('#places-search').value.trim();
+    var main = $('#places-main').value.trim();
+    var sub = $('#places-sub').value.trim();
+    var tbody = $('#places-table tbody');
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">Loading…</td></tr>';
+    var params = new URLSearchParams({ limit: '200' });
+    if (search) params.set('search', search);
+    if (main) params.set('main', main);
+    if (sub) params.set('sub', sub);
+    fetch('/omar-dash/api/places?' + params.toString(), { credentials: 'same-origin' })
+      .then(function(r) { return r.json(); })
+      .then(function(b) {
         if (!b.ok) throw new Error(b.error);
-        if (!b.items.length) { tbody.innerHTML = '<tr><td colspan="5" class="text-white/40 text-center py-8">No places match.</td></tr>'; return; }
-        tbody.innerHTML = b.items.map(p => '<tr><td><div class="font-semibold">' + escapeHtml(p.title) + '</div><div class="text-xs text-white/40 font-mono">' + escapeHtml(p.place_id) + '</div></td><td>' + escapeHtml(p.type || '—') + '</td><td>' + escapeHtml(p.primary_slug || '—') + '</td><td>' + (p.rating != null ? p.rating + ' ★ <span class="text-white/40">(' + (p.reviews || 0) + ')</span>' : '—') + '</td><td><span class="pill pill-ghost">' + (p.created_via || 'scraper') + '</span></td></tr>').join('');
-      } catch (e) { tbody.innerHTML = '<tr><td colspan="5" class="text-red-300">Error: ' + escapeHtml(e.message) + '</td></tr>'; }
-    }
-    $('#places-search-btn').addEventListener('click', loadPlaces);
-    $('#places-search').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadPlaces(); });
-
-    // ── Users ───────────────────────────────────────────────────
-    async function loadUsers() {
-      const tbody = $('#users-table tbody');
-      tbody.innerHTML = '<tr><td colspan="5" class="text-white/40">Loading…</td></tr>';
-      try {
-        const r = await fetch('/omar-dash/api/users?limit=200', { credentials: 'same-origin' });
-        const b = await r.json();
-        if (!b.ok) throw new Error(b.error);
-        if (!b.items.length) { tbody.innerHTML = '<tr><td colspan="5" class="text-white/40 text-center py-8">No users yet.</td></tr>'; return; }
-        tbody.innerHTML = b.items.map(u => {
-          const avatar = u.photo_url ? '<img src="' + escapeHtml(u.photo_url) + '" class="w-7 h-7 rounded-full inline-block mr-2"/>' : '<div class="w-7 h-7 rounded-full bg-white/10 inline-block mr-2 align-middle"></div>';
-          return '<tr><td>' + avatar + '<span class="align-middle font-semibold">' + escapeHtml(u.display_name || '(no name)') + '</span></td><td class="text-white/70">' + escapeHtml(u.email || '—') + '</td><td class="text-white/50">' + fmtDate(u.created_at) + '</td><td class="text-white/50">' + fmtDate(u.last_login_at) + '</td><td><span class="pill ' + (u.submission_count > 0 ? 'pill-approved' : 'pill-ghost') + '">' + u.submission_count + '</span></td></tr>';
+        if (!b.items.length) {
+          tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">No places match.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = b.items.map(function(p) {
+          var rating = (p.rating != null)
+            ? p.rating + ' ★ <span style="color:rgba(255,255,255,0.4);">(' + (p.reviews || 0) + ')</span>'
+            : '—';
+          return '<tr><td><div style="font-weight:600;">' + escapeHtml(p.title) + '</div><div class="place-id">' + escapeHtml(p.place_id) + '</div></td>' +
+            '<td>' + escapeHtml(p.type || '—') + '</td>' +
+            '<td>' + escapeHtml(p.primary_slug || '—') + '</td>' +
+            '<td>' + rating + '</td>' +
+            '<td><span class="pill pill-ghost">' + escapeHtml(p.created_via || 'scraper') + '</span></td></tr>';
         }).join('');
-      } catch (e) { tbody.innerHTML = '<tr><td colspan="5" class="text-red-300">Error: ' + escapeHtml(e.message) + '</td></tr>'; }
-    }
+      })
+      .catch(function(e) {
+        tbody.innerHTML = '<tr><td colspan="5" class="err">Error: ' + escapeHtml(e.message) + '</td></tr>';
+      });
+  }
 
-    // ── Reports ─────────────────────────────────────────────────
-    function renderReport(it) {
-      const noteBlock = it.note ? '<div class="mt-2 text-xs text-white/60">' + escapeHtml(it.note) + '</div>' : '';
-      const action = it.status === 'open'
-        ? '<button class="btn-primary resolve-btn mt-3" data-id="' + it.id + '">Mark resolved</button>'
-        : '';
-      return '<div class="glass-strong rounded-2xl p-5"><div class="flex items-center gap-3 flex-wrap mb-2"><span class="pill pill-' + it.status + '">' + it.status.toUpperCase() + '</span><span class="text-xs text-white/50">' + fmtDate(it.created_at) + '</span></div><div class="font-semibold text-sm">' + escapeHtml(it.reason) + ' <span class="text-white/40 text-xs">on</span> <span class="font-mono text-xs text-white/60">' + escapeHtml(it.place_id) + '</span></div>' + noteBlock + '<div class="mt-2 text-xs text-white/40">by ' + escapeHtml(it.reported_by_email || it.reported_by_uid) + '</div>' + action + '</div>';
-    }
-    async function loadReports() {
-      const list = $('#reports-list');
-      list.innerHTML = '<div class="text-white/40 p-4">Loading…</div>';
-      try {
-        const r = await fetch('/omar-dash/api/reports?status=' + repStatus + '&limit=200', { credentials: 'same-origin' });
-        const b = await r.json();
+  // ── Users ──
+  function loadUsers() {
+    var tbody = $('#users-table tbody');
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">Loading…</td></tr>';
+    fetch('/omar-dash/api/users?limit=200', { credentials: 'same-origin' })
+      .then(function(r) { return r.json(); })
+      .then(function(b) {
         if (!b.ok) throw new Error(b.error);
-        list.innerHTML = b.items.length ? b.items.map(renderReport).join('') : '<div class="glass-strong rounded-2xl p-12 text-center text-white/50">Nothing here.</div>';
-        $$('.resolve-btn').forEach(btn => btn.addEventListener('click', async () => {
-          btn.disabled = true; btn.textContent = '…';
-          try {
-            const r = await fetch('/omar-dash/api/reports/' + btn.dataset.id + '/resolve', { method: 'POST', credentials: 'same-origin' });
-            const data = await r.json(); if (!data.ok) throw new Error(data.error);
-            loadReports();
-          } catch (e) { alert('Resolve failed: ' + e.message); btn.disabled = false; btn.textContent = 'Mark resolved'; }
-        }));
-      } catch (e) { list.innerHTML = '<div class="text-red-300 p-4">Error: ' + escapeHtml(e.message) + '</div>'; }
-    }
+        if (!b.items.length) {
+          tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">No users yet.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = b.items.map(function(u) {
+          var avatar = u.photo_url
+            ? '<img src="' + escapeHtml(u.photo_url) + '" class="avatar" alt="">'
+            : '<span class="avatar-placeholder"></span>';
+          return '<tr><td>' + avatar + '<span style="font-weight:600;vertical-align:middle;">' + escapeHtml(u.display_name || '(no name)') + '</span></td>' +
+            '<td style="color:rgba(255,255,255,0.7);">' + escapeHtml(u.email || '—') + '</td>' +
+            '<td style="color:rgba(255,255,255,0.5);">' + fmtDate(u.created_at) + '</td>' +
+            '<td style="color:rgba(255,255,255,0.5);">' + fmtDate(u.last_login_at) + '</td>' +
+            '<td><span class="pill ' + (u.submission_count > 0 ? 'pill-approved' : 'pill-ghost') + '">' + u.submission_count + '</span></td></tr>';
+        }).join('');
+      })
+      .catch(function(e) {
+        tbody.innerHTML = '<tr><td colspan="5" class="err">Error: ' + escapeHtml(e.message) + '</td></tr>';
+      });
+  }
 
-    // ── Stats ───────────────────────────────────────────────────
-    async function loadStats() {
-      const grid = $('#stats-grid');
-      const detail = $('#stats-detail');
-      grid.innerHTML = '<div class="text-white/40 col-span-4">Loading…</div>';
-      try {
-        const r = await fetch('/omar-dash/api/stats', { credentials: 'same-origin' });
-        const b = await r.json();
+  // ── Reports ──
+  function renderReport(it) {
+    var noteBlock = it.note
+      ? '<div style="margin-top:8px;font-size:12px;color:rgba(255,255,255,0.6);">' + escapeHtml(it.note) + '</div>'
+      : '';
+    var action = it.status === 'open'
+      ? '<button class="btn btn-primary resolve-btn" data-id="' + it.id + '" style="margin-top:12px;">Mark resolved</button>'
+      : '';
+    return '<div class="glass-strong card">' +
+      '<div class="head"><span class="pill pill-' + it.status + '">' + it.status.toUpperCase() + '</span>' +
+      '<span class="meta">' + fmtDate(it.created_at) + '</span></div>' +
+      '<div style="font-weight:600;font-size:13px;">' + escapeHtml(it.reason) +
+      ' <span style="color:rgba(255,255,255,0.4);font-size:11px;">on</span> ' +
+      '<span style="font-family:ui-monospace,monospace;font-size:11px;color:rgba(255,255,255,0.6);">' + escapeHtml(it.place_id) + '</span></div>' +
+      noteBlock +
+      '<div style="margin-top:8px;font-size:11px;color:rgba(255,255,255,0.4);">by ' + escapeHtml(it.reported_by_email || it.reported_by_uid) + '</div>' +
+      action + '</div>';
+  }
+  function loadReports() {
+    var list = $('#reports-list');
+    list.innerHTML = '<div class="empty">Loading…</div>';
+    fetch('/omar-dash/api/reports?status=' + repStatus + '&limit=200', { credentials: 'same-origin' })
+      .then(function(r) { return r.json(); })
+      .then(function(b) {
         if (!b.ok) throw new Error(b.error);
-        const cards = [
-          ['Places',  b.places],
-          ['Users',   b.users],
+        list.innerHTML = b.items.length
+          ? b.items.map(renderReport).join('')
+          : '<div class="glass-strong empty"><div class="empty-icon">🚩</div>Nothing here.</div>';
+        $$('.resolve-btn').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            btn.disabled = true; btn.textContent = '…';
+            fetch('/omar-dash/api/reports/' + btn.dataset.id + '/resolve', {
+              method: 'POST', credentials: 'same-origin'
+            })
+              .then(function(r) { return r.json(); })
+              .then(function(d) { if (!d.ok) throw new Error(d.error); loadReports(); })
+              .catch(function(e) { alert('Resolve failed: ' + e.message); btn.disabled = false; btn.textContent = 'Mark resolved'; });
+          });
+        });
+      })
+      .catch(function(e) { list.innerHTML = '<div class="err">Error: ' + escapeHtml(e.message) + '</div>'; });
+  }
+
+  // ── Stats ──
+  function loadStats() {
+    var grid = $('#stats-grid');
+    var detail = $('#stats-detail');
+    grid.innerHTML = '<div style="color:rgba(255,255,255,0.5);grid-column:1/-1;">Loading…</div>';
+    detail.innerHTML = '';
+    fetch('/omar-dash/api/stats', { credentials: 'same-origin' })
+      .then(function(r) { return r.json(); })
+      .then(function(b) {
+        if (!b.ok) throw new Error(b.error);
+        var cards = [
+          ['Places', b.places],
+          ['Users', b.users],
           ['Pending submissions', b.submissions.pending],
-          ['Open reports', b.reports.open],
+          ['Open reports', b.reports.open]
         ];
-        grid.innerHTML = cards.map(([k, v]) => '<div class="glass-strong stat-card"><div class="text-xs text-white/50 uppercase tracking-wide">' + escapeHtml(k) + '</div><div class="stat-num mt-2">' + v + '</div></div>').join('');
-        detail.innerHTML = '<div class="glass-strong rounded-2xl p-5"><h3 class="text-base font-bold mb-3">Submissions</h3><div class="grid grid-cols-2 md:grid-cols-4 gap-3"><div>Pending<br><span class="text-2xl font-extrabold text-yellow-300">' + b.submissions.pending + '</span></div><div>Approved<br><span class="text-2xl font-extrabold text-green-300">' + b.submissions.approved + '</span></div><div>Rejected<br><span class="text-2xl font-extrabold text-red-300">' + b.submissions.rejected + '</span></div><div>Duplicates<br><span class="text-2xl font-extrabold text-blue-300">' + b.submissions.duplicate + '</span></div></div></div><div class="glass-strong rounded-2xl p-5 mt-4"><h3 class="text-base font-bold mb-3">Reports</h3><div class="grid grid-cols-2 gap-3"><div>Open<br><span class="text-2xl font-extrabold text-red-300">' + b.reports.open + '</span></div><div>Resolved<br><span class="text-2xl font-extrabold text-green-300">' + b.reports.resolved + '</span></div></div></div>';
-      } catch (e) { grid.innerHTML = '<div class="text-red-300 col-span-4">Error: ' + escapeHtml(e.message) + '</div>'; }
-    }
+        grid.innerHTML = cards.map(function(c) {
+          return '<div class="glass-strong stat-card">' +
+            '<div class="stat-label">' + escapeHtml(c[0]) + '</div>' +
+            '<div class="stat-num">' + c[1] + '</div></div>';
+        }).join('');
+        detail.innerHTML =
+          '<div class="glass-strong stat-detail"><h3>Submissions</h3><div class="row cols-4">' +
+          '<div class="item">Pending<span class="big big-yellow">' + b.submissions.pending + '</span></div>' +
+          '<div class="item">Approved<span class="big big-green">' + b.submissions.approved + '</span></div>' +
+          '<div class="item">Rejected<span class="big big-red">' + b.submissions.rejected + '</span></div>' +
+          '<div class="item">Duplicates<span class="big big-blue">' + b.submissions.duplicate + '</span></div>' +
+          '</div></div>' +
+          '<div class="glass-strong stat-detail"><h3>Reports</h3><div class="row">' +
+          '<div class="item">Open<span class="big big-red">' + b.reports.open + '</span></div>' +
+          '<div class="item">Resolved<span class="big big-green">' + b.reports.resolved + '</span></div>' +
+          '</div></div>';
+      })
+      .catch(function(e) {
+        grid.innerHTML = '<div class="err" style="grid-column:1/-1;">Error: ' + escapeHtml(e.message) + '</div>';
+      });
+  }
 
-    // ── Wire-up ─────────────────────────────────────────────────
-    $$('.nav-item').forEach(n => n.addEventListener('click', () => setView(n.dataset.view)));
-    $$('.sub-tab').forEach(t => t.addEventListener('click', () => setSubStatus(t.dataset.subStatus)));
-    $$('.rep-tab').forEach(t => t.addEventListener('click', () => setRepStatus(t.dataset.repStatus)));
-    $('#refreshBtn').addEventListener('click', () => load(currentView));
+  // ── Wire-up ──
+  $$('.nav-item').forEach(function(n) {
+    n.addEventListener('click', function() { setView(n.dataset.view); });
+  });
+  $$('[data-sub-status]').forEach(function(t) {
+    t.addEventListener('click', function() { setSubStatus(t.dataset.subStatus); });
+  });
+  $$('[data-rep-status]').forEach(function(t) {
+    t.addEventListener('click', function() { setRepStatus(t.dataset.repStatus); });
+  });
+  $('#refreshBtn').addEventListener('click', function() { load(currentView); });
+  $('#places-search-btn').addEventListener('click', loadPlaces);
+  $('#places-search').addEventListener('keydown', function(e) { if (e.key === 'Enter') loadPlaces(); });
 
-    setSubStatus('pending');
-    setRepStatus('open');
-    setView('submissions');
-  </script>
+  setSubStatus('pending');
+  setRepStatus('open');
+  setView('submissions');
+</script>
 </body>
 </html>`;
 }
