@@ -9,6 +9,10 @@ import { sendSubmissionDecisionEmail } from '../email.js';
 import { resolveUrl } from '../url-resolver.js';
 import { enrichWithScores } from '../../parsers/scoring.js';
 import { mainCategoryForSub } from '../../catalogue/main-of.js';
+import {
+  writeUserNotification,
+  formatEditHeadline,
+} from './notifications.js';
 //
 // Approve:
 //   - Re-fetch the submitted URL's place if extracted_place_id is set
@@ -208,24 +212,68 @@ export async function updateSubmission(id, patch) {
   const ref = db.collection('place_submissions').doc(id);
   const snap = await ref.get();
   if (!snap.exists) throw new Error(`submission ${id} not found`);
+  const before = snap.data();
+  const existingManual = (before.manual && typeof before.manual === 'object')
+      ? before.manual
+      : {};
+
+  // Track which manual fields actually changed so the notification
+  // body can name them. Field added or value updated counts; field
+  // removed (explicit null/empty) also counts.
+  const changedFields = [];
 
   const update = {};
   for (const [k, v] of Object.entries(patch)) {
     if (!ALLOWED_PATCH_FIELDS.has(k)) continue;
     if (k === 'manual') {
+      const incomingManual = normaliseManual(v);
+      // Diff incoming vs existing.
+      for (const [mk, mv] of Object.entries(incomingManual)) {
+        if (existingManual[mk] !== mv) changedFields.push(mk);
+      }
       // Merge into existing manual block rather than overwrite — lets
       // the admin save one field at a time without losing prior edits.
-      const existing = (snap.data().manual && typeof snap.data().manual === 'object')
-          ? snap.data().manual
-          : {};
-      update.manual = { ...existing, ...normaliseManual(v) };
+      update.manual = { ...existingManual, ...incomingManual };
     } else {
-      update[k] = v == null ? null : String(v).trim();
+      const newVal = v == null ? null : String(v).trim();
+      if (before[k] !== newVal) changedFields.push(k);
+      update[k] = newVal;
     }
   }
   update.last_edited_at = new Date();
   await ref.update(update);
-  return { id, patched: Object.keys(update) };
+
+  // Best-effort: notify the submitter that their place was touched by
+  // an admin. Only when status is still pending (approval/rejection
+  // have their own dedicated notifications fired below). Debounce by
+  // last_edited_at — if the admin saves twice in <60s we only ping
+  // once.
+  if (
+      before.status === 'pending' &&
+      changedFields.length > 0 &&
+      before.submitted_by_uid
+  ) {
+    const lastEdited = before.last_edited_at?.toDate?.();
+    const recentEdit = lastEdited && (Date.now() - lastEdited.getTime() < 60_000);
+    if (!recentEdit) {
+      const title = (update.manual?.title) ||
+          before.extracted_title ||
+          before.submitted_url ||
+          'your submitted place';
+      const headline = formatEditHeadline(title, changedFields);
+      writeUserNotification(db, before.submitted_by_uid, {
+        kind: 'submission_updated',
+        title: headline,
+        body:
+            'Open the place from your profile to see the latest details.',
+        place_id: (before.extracted_place_id || update.manual?.place_id) || null,
+        submission_id: id,
+        changed_fields: changedFields.slice(0, 10),
+      });
+    }
+  }
+
+  return { id, patched: Object.keys(update), changed_fields: changedFields };
 }
 
 /// Approve a submission. Two paths:
@@ -389,10 +437,23 @@ export async function approveSubmission(id, { adminNote }) {
   // Best-effort notification email to the submitter. Resolves the
   // user's email from users/{uid} since the submission row only
   // stores the uid.
+  const approvedTitle = data.extracted_title || manual.title || 'your place';
   notifyDecision(db, data.submitted_by_uid, 'approved', {
-    placeTitle: data.extracted_title || manual.title,
+    placeTitle: approvedTitle,
     reason: adminNote,
   }).catch((e) => console.warn('approve-email failed:', e.message));
+
+  // In-app notification — drops a row into
+  // user_notifications/{uid}/items/, picked up by the mobile
+  // NotificationsCubit's live stream and surfaced as a bell badge.
+  writeUserNotification(db, data.submitted_by_uid, {
+    kind: 'submission_approved',
+    title: `Your place "${approvedTitle}" was approved!`,
+    body: adminNote ||
+        'It\'s now live in the PortSaid Guide catalogue for everyone to see.',
+    place_id: placeId,
+    submission_id: id,
+  });
 
   return { id, place_id: placeId };
 }
@@ -404,17 +465,34 @@ export async function rejectSubmission(id, { reason }) {
   if (!snap.exists) throw new Error(`submission ${id} not found`);
   const data = snap.data();
   const now = new Date();
+  const adminNote = reason || 'Rejected by admin (no reason provided)';
   await ref.update({
     status: 'rejected',
     resolved_at: now,
     resolved_by: 'admin',
-    admin_note: reason || 'Rejected by admin (no reason provided)',
+    admin_note: adminNote,
   });
 
+  const rejectedTitle = data.extracted_title ||
+      data.manual?.title ||
+      data.submitted_url ||
+      'your submission';
+
   notifyDecision(db, data.submitted_by_uid, 'rejected', {
-    placeTitle: data.extracted_title,
+    placeTitle: rejectedTitle,
     reason: reason || data.admin_note || null,
   }).catch((e) => console.warn('reject-email failed:', e.message));
+
+  // In-app notification. The reason is surfaced in the notification
+  // body verbatim so the user gets context without opening the app
+  // (push) AND has it stored offline (Firestore cache).
+  writeUserNotification(db, data.submitted_by_uid, {
+    kind: 'submission_rejected',
+    title: `Your submission for "${rejectedTitle}" was rejected`,
+    body: adminNote,
+    submission_id: id,
+    admin_note: adminNote,
+  });
 
   return { id };
 }
