@@ -9,6 +9,7 @@ import { sendSubmissionDecisionEmail } from '../email.js';
 import { resolveUrl } from '../url-resolver.js';
 import { enrichWithScores } from '../../parsers/scoring.js';
 import { mainCategoryForSub } from '../../catalogue/main-of.js';
+import { hotInsertPlaceIntoCatalogue } from '../../catalogue/hot-insert.js';
 import {
   writeUserNotification,
   formatEditHeadline,
@@ -433,6 +434,25 @@ export async function approveSubmission(id, { adminNote }) {
     extracted_place_id: placeId, // pin it
     admin_note: adminNote || null,
   });
+
+  // Hot-insert into catalogue_buckets so the mobile sees the new
+  // place in its category browse IMMEDIATELY. Without this, the
+  // place sits in places/{id} but nobody finds it via the catalogue
+  // until the next cron scrape rebuilds the buckets. Best-effort —
+  // a failure here doesn't roll back the approval, it just delays
+  // catalogue visibility until the next scrape.
+  try {
+    const finalSnap = await placeRef.get();
+    if (finalSnap.exists) {
+      const finalData = { ...finalSnap.data(), place_id: placeId };
+      const hot = await hotInsertPlaceIntoCatalogue(db, finalData);
+      console.log(
+        `[approve] hot-inserted into buckets=${(hot.touched || []).join(',')}`
+      );
+    }
+  } catch (e) {
+    console.warn('[approve] hot-insert failed:', e.message);
+  }
 
   // Best-effort notification email to the submitter. Resolves the
   // user's email from users/{uid} since the submission row only
