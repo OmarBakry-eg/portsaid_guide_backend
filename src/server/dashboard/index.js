@@ -303,27 +303,66 @@ export function mountDashboard(app) {
   // Catalogue reconciliation — finds places in places/ that aren't in
   // any catalogue_buckets/* and hot-inserts them. Use to recover from
   // approvals made before the hot-insert code shipped, or to fix any
-  // future silent hot-insert failure. 5-minute server-side cooldown
-  // to prevent button-mashing from racking up Firestore reads.
+  // future silent hot-insert failure.
+  //
+  // Behavior:
+  //   - 60-second cooldown between actual runs (caps Firestore reads
+  //     under typical button-mash patterns).
+  //   - Within the cooldown, returns the LAST run's cached summary
+  //     instead of an error — so users navigating away and back still
+  //     see what happened. UX issue we hit: a 5-min cooldown + lost
+  //     result text after a tab switch made clicking again look
+  //     completely broken.
+  //   - GET variant returns the cached summary without running.
   let lastReconcileAt = 0;
+  let lastReconcileSummary = null;
+
   app.post(
     '/omar-dash/api/catalogue/reconcile',
     basicAuthGate,
     jsonHandler(async (_req, res) => {
-      const cooldownMs = 5 * 60 * 1000;
+      const cooldownMs = 60 * 1000;
       const elapsed = Date.now() - lastReconcileAt;
-      if (elapsed < cooldownMs) {
-        const waitSec = Math.ceil((cooldownMs - elapsed) / 1000);
-        return res.status(429).json({
-          ok: false,
-          error: `Cooldown — try again in ${waitSec}s.`,
+      if (elapsed < cooldownMs && lastReconcileSummary) {
+        // Don't error — re-surface the last summary so the user sees
+        // what the previous run did. Marked cached:true so the client
+        // can show a "(last run Xs ago)" hint instead of a fresh
+        // success animation.
+        const secondsSince = Math.floor(elapsed / 1000);
+        return res.json({
+          ok: true,
+          cached: true,
+          seconds_since: secondsSince,
+          retry_in: Math.ceil((cooldownMs - elapsed) / 1000),
+          ...lastReconcileSummary,
         });
       }
       lastReconcileAt = Date.now();
       const db = await getFirestore();
       const summary = await reconcileCatalogue(db);
+      lastReconcileSummary = summary;
       console.log('[omar-dash] reconcile summary:', summary);
-      res.json({ ok: true, ...summary });
+      res.json({ ok: true, cached: false, seconds_since: 0, ...summary });
+    })
+  );
+
+  // GET variant returns the cached summary without running anything.
+  // Lets the dashboard show "last reconciled N seconds ago: …" on
+  // every Stats page render, instead of forgetting the result the
+  // moment the user navigates away.
+  app.get(
+    '/omar-dash/api/catalogue/reconcile',
+    basicAuthGate,
+    jsonHandler(async (_req, res) => {
+      res.json({
+        ok: true,
+        cached: true,
+        summary: lastReconcileSummary,
+        last_run_iso: lastReconcileAt
+            ? new Date(lastReconcileAt).toISOString() : null,
+        seconds_since: lastReconcileAt
+            ? Math.floor((Date.now() - lastReconcileAt) / 1000) : null,
+      });
     })
   );
 

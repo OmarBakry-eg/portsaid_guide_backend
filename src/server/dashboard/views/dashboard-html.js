@@ -1319,7 +1319,7 @@ export function renderDashboardHtml() {
           '<div class="glass-strong stat-detail">' +
             '<h3>Catalogue maintenance</h3>' +
             '<div style="font-size:12px;color:rgba(255,255,255,0.6);margin-bottom:10px;">' +
-              'Approved places that didn\\'t make it into the buckets (because the hot-insert failed or pre-dated this code) get spliced in. 5-minute cooldown.' +
+              'Approved places that didn\\'t make it into the buckets (because the hot-insert failed or pre-dated this code) get spliced in. 60-second cooldown.' +
             '</div>' +
             '<button id="reconcile-btn" class="btn btn-primary">Reconcile catalogue</button>' +
             '<div id="reconcile-status" class="status-msg" style="margin-top:10px;"></div>' +
@@ -1329,6 +1329,48 @@ export function renderDashboardHtml() {
         // creates a new button each time so we don't track state).
         var rcBtn = $('#reconcile-btn');
         var rcStatus = $('#reconcile-status');
+
+        // Helper — format a summary into one line of human-readable copy.
+        function formatReconcileSummary(d, opts) {
+          var msg = 'Reconciled ' + d.reconciled + ' of ' + d.missing_count +
+            ' missing places (places=' + d.places_total + ', bucketed=' + d.bucketed_total + ').';
+          if (d.skipped_rejected > 0) {
+            msg += ' ' + d.skipped_rejected + ' skipped (not in Port Said / no coords).';
+          }
+          if (opts && opts.cached) {
+            msg += ' Last run ' + agoLabel(d.seconds_since) + '.';
+          }
+          return msg;
+        }
+
+        function agoLabel(sec) {
+          if (typeof sec !== 'number' || sec < 0) return 'just now';
+          if (sec < 5) return 'just now';
+          if (sec < 60) return sec + 's ago';
+          if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
+          return Math.floor(sec / 3600) + 'h ago';
+        }
+
+        // On every Stats render, hydrate the status line from the
+        // SERVER's cached summary so users see what their previous
+        // click did, even after navigating away and back. Cheap —
+        // a single Firestore-free GET.
+        if (rcStatus) {
+          fetch('/omar-dash/api/catalogue/reconcile', {
+            method: 'GET',
+            credentials: 'same-origin',
+          })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+              if (d && d.summary) {
+                var s = Object.assign({}, d.summary, { seconds_since: d.seconds_since });
+                rcStatus.textContent = formatReconcileSummary(s, { cached: true });
+                rcStatus.className = 'status-msg ok';
+              }
+            })
+            .catch(function() { /* silent — fresh-server case */ });
+        }
+
         if (rcBtn) {
           rcBtn.addEventListener('click', function() {
             rcBtn.disabled = true;
@@ -1344,12 +1386,7 @@ export function renderDashboardHtml() {
               .then(function(r) { return r.json(); })
               .then(function(d) {
                 if (!d.ok) throw new Error(d.error || 'failed');
-                var msg = 'Reconciled ' + d.reconciled + ' of ' + d.missing_count +
-                  ' missing places (places=' + d.places_total + ', bucketed=' + d.bucketed_total + ').';
-                if (d.skipped_rejected > 0) {
-                  msg += ' ' + d.skipped_rejected + ' skipped (not in Port Said / no coords).';
-                }
-                rcStatus.textContent = msg;
+                rcStatus.textContent = formatReconcileSummary(d, { cached: !!d.cached });
                 rcStatus.className = 'status-msg ok';
               })
               .catch(function(e) {
