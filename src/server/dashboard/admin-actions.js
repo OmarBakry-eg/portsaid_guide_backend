@@ -320,6 +320,18 @@ export async function approveSubmission(id, { adminNote }) {
             ? manual.source_categories
             : (primarySlug && primarySlug !== 'other' ? [primarySlug] : []);
 
+    // Track which fields the admin explicitly set so the scraper merge
+    // can preserve them on subsequent cron runs. Without this list,
+    // mergePlace() can't tell which prev fields came from the scraper
+    // vs from the dashboard. Title/address always count if set.
+    const pinned = [];
+    if (manual.title) pinned.push('title');
+    if (manual.type) pinned.push('type');
+    if (manual.address) pinned.push('address');
+    if (manual.phone) pinned.push('phone');
+    if (manual.primary_slug) pinned.push('primary_slug');
+    if (manual.thumbnail) pinned.push('thumbnail');
+
     const place = {
       place_id: placeId,
       title,
@@ -341,6 +353,8 @@ export async function approveSubmission(id, { adminNote }) {
       created_by_uid: data.submitted_by_uid,
       created_via: 'admin_manual',
       submission_id: id,
+      // Pinned fields → preserved across future scraper merges.
+      admin_pinned_fields: pinned,
       classification: {
         method: 'admin_manual',
         confidence: 1.0,

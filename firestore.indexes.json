@@ -39,6 +39,15 @@
       ]
     },
     {
+      "_comment_": "Admin dashboard /omar-dash listInquiries — filter by status, ordered newest-first. Used by src/server/dashboard/admin-queries.js#listInquiries.",
+      "collectionGroup": "place_inquiries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "created_at", "order": "DESCENDING" }
+      ]
+    },
+    {
       "_comment_": "Admin dashboard listPlaces — filter by source_categories (array-contains) + order by title. Used by src/server/dashboard/admin-queries.js#listPlaces.",
       "collectionGroup": "places",
       "queryScope": "COLLECTION",

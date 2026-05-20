@@ -233,7 +233,7 @@ async function submitPlace(req, res) {
 
     // 1. Resolve URL → hex pair / coords / rejection.
     const parsed = await resolveUrl(url);
-    log(req, 'resolveUrl done', { rejected: !!parsed.rejection, kind: parsed.kind, hex: parsed.place_hex_pair, lat: parsed.lat, lon: parsed.lon, name_hint: parsed.name_hint });
+    log(req, 'resolveUrl done', { rejected: !!parsed.rejection, kind: parsed.kind, hex: parsed.place_hex_pair, apple: parsed.apple_place_id, lat: parsed.lat, lon: parsed.lon, name_hint: parsed.name_hint });
     if (parsed.rejection) {
       const submissionId = await recordSubmission(db, {
         submitted_url: url,

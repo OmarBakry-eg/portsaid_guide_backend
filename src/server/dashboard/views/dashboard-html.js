@@ -339,6 +339,7 @@ export function renderDashboardHtml() {
       <div class="nav-item" data-view="places"><span>🗺️</span><span>All places</span></div>
       <div class="nav-item" data-view="users"><span>👤</span><span>Users</span></div>
       <div class="nav-item" data-view="reports"><span>🚩</span><span>Reports</span></div>
+      <div class="nav-item" data-view="inquiries"><span>💬</span><span>Inquiries</span></div>
       <div class="nav-item" data-view="stats"><span>📊</span><span>Stats</span></div>
     </aside>
 
@@ -392,6 +393,16 @@ export function renderDashboardHtml() {
         <div id="reports-list"></div>
       </section>
 
+      <!-- Inquiries -->
+      <section data-view-section="inquiries">
+        <div class="tab-row glass">
+          <button data-inq-status="open" class="tab btn btn-ghost">Open <span id="count-inq-open" style="opacity:0.6;font-size:11px;margin-left:4px;"></span></button>
+          <button data-inq-status="resolved" class="tab btn btn-ghost">Resolved</button>
+          <button data-inq-status="all" class="tab btn btn-ghost">All</button>
+        </div>
+        <div id="inquiries-list"></div>
+      </section>
+
       <!-- Stats -->
       <section data-view-section="stats">
         <div class="stat-grid" id="stats-grid"></div>
@@ -424,6 +435,7 @@ export function renderDashboardHtml() {
   var currentView = 'submissions';
   var subStatus = 'pending';
   var repStatus = 'open';
+  var inqStatus = 'open';
 
   function setView(view) {
     currentView = view;
@@ -452,11 +464,20 @@ export function renderDashboardHtml() {
     loadReports();
   }
 
+  function setInqStatus(s) {
+    inqStatus = s;
+    $$('[data-inq-status]').forEach(function(t) {
+      t.classList.toggle('active', t.dataset.inqStatus === s);
+    });
+    loadInquiries();
+  }
+
   function load(view) {
     if (view === 'submissions') loadSubmissions();
     else if (view === 'places') loadPlaces();
     else if (view === 'users') loadUsers();
     else if (view === 'reports') loadReports();
+    else if (view === 'inquiries') loadInquiries();
     else if (view === 'stats') loadStats();
   }
 
@@ -862,6 +883,77 @@ export function renderDashboardHtml() {
       .catch(function(e) { list.innerHTML = '<div class="err">Error: ' + escapeHtml(e.message) + '</div>'; });
   }
 
+  // ── Inquiries ──
+  // User-initiated inquiries from the mobile app — typically "the
+  // title is wrong" or "please update the address". Each card shows
+  // the subject, free-text body, and the submitter's email so the
+  // admin can reply to their mailto chain.
+  function renderInquiry(it) {
+    var placeLink = it.place_id
+      ? '<a class="url" href="#" data-place-jump="' + escapeHtml(it.place_id) + '">place: ' + escapeHtml(it.place_id) + '</a>'
+      : '';
+    var subLink = it.submission_id
+      ? ' <span style="color:rgba(255,255,255,0.4);">| submission: ' + escapeHtml(it.submission_id) + '</span>'
+      : '';
+    var fromLine = it.user_email
+      ? '<a href="mailto:' + escapeHtml(it.user_email) + '" class="url">' + escapeHtml(it.user_email) + '</a>'
+      : escapeHtml(it.user_uid || '(unknown user)');
+    var responseLine = it.admin_response
+      ? '<div style="margin-top:8px;font-size:12px;color:rgba(255,255,255,0.5);"><b>Admin response:</b> ' + escapeHtml(it.admin_response) + '</div>'
+      : '';
+    var action = it.status === 'open'
+      ? '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">' +
+        '<button class="btn btn-primary inq-resolve-btn" data-id="' + it.id + '">Mark resolved</button>' +
+        (it.user_email
+          ? '<a class="btn btn-ghost" href="mailto:' + escapeHtml(it.user_email) + '?subject=' +
+            encodeURIComponent('Re: ' + (it.subject || 'your inquiry')) + '" target="_blank" rel="noopener">Reply via mail</a>'
+          : '') +
+        '</div>'
+      : '';
+    return '<div class="glass-strong card">' +
+      '<div class="head"><span class="pill pill-' + it.status + '">' + it.status.toUpperCase() + '</span>' +
+      '<span class="meta">' + fmtDate(it.created_at) + '</span></div>' +
+      '<h3 class="title">' + escapeHtml(it.subject) + '</h3>' +
+      '<div style="margin-top:6px;font-size:12px;color:rgba(255,255,255,0.6);">from ' + fromLine +
+      (it.user_name ? ' <span style="color:rgba(255,255,255,0.5);">(' + escapeHtml(it.user_name) + ')</span>' : '') +
+      '</div>' +
+      (placeLink || subLink
+        ? '<div style="margin-top:4px;font-size:11px;color:rgba(255,255,255,0.5);font-family:ui-monospace,monospace;">' + placeLink + subLink + '</div>'
+        : '') +
+      '<div style="margin-top:10px;font-size:13px;color:rgba(255,255,255,0.85);white-space:pre-wrap;">' + escapeHtml(it.body) + '</div>' +
+      responseLine + action + '</div>';
+  }
+
+  function loadInquiries() {
+    var list = $('#inquiries-list');
+    list.innerHTML = '<div class="empty">Loading…</div>';
+    fetch('/omar-dash/api/inquiries?status=' + inqStatus + '&limit=200', { credentials: 'same-origin' })
+      .then(function(r) { return r.json(); })
+      .then(function(b) {
+        if (!b.ok) throw new Error(b.error);
+        if (inqStatus === 'open') $('#count-inq-open').textContent = '(' + b.count + ')';
+        list.innerHTML = b.items.length
+          ? b.items.map(renderInquiry).join('')
+          : '<div class="glass-strong empty"><div class="empty-icon">💬</div>No inquiries here.</div>';
+        $$('.inq-resolve-btn').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            var response = prompt('Optional note to record (visible only on dashboard):') || '';
+            btn.disabled = true; btn.textContent = '…';
+            fetch('/omar-dash/api/inquiries/' + btn.dataset.id + '/resolve', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ response: response }),
+              credentials: 'same-origin'
+            })
+              .then(function(r) { return r.json(); })
+              .then(function(d) { if (!d.ok) throw new Error(d.error); loadInquiries(); })
+              .catch(function(e) { alert('Resolve failed: ' + e.message); btn.disabled = false; btn.textContent = 'Mark resolved'; });
+          });
+        });
+      })
+      .catch(function(e) { list.innerHTML = '<div class="err">Error: ' + escapeHtml(e.message) + '</div>'; });
+  }
+
   // ── Stats ──
   function loadStats() {
     var grid = $('#stats-grid');
@@ -876,7 +968,8 @@ export function renderDashboardHtml() {
           ['Places', b.places],
           ['Users', b.users],
           ['Pending submissions', b.submissions.pending],
-          ['Open reports', b.reports.open]
+          ['Open reports', b.reports.open],
+          ['Open inquiries', (b.inquiries && b.inquiries.open) || 0]
         ];
         grid.innerHTML = cards.map(function(c) {
           return '<div class="glass-strong stat-card">' +
@@ -893,7 +986,13 @@ export function renderDashboardHtml() {
           '<div class="glass-strong stat-detail"><h3>Reports</h3><div class="row">' +
           '<div class="item">Open<span class="big big-red">' + b.reports.open + '</span></div>' +
           '<div class="item">Resolved<span class="big big-green">' + b.reports.resolved + '</span></div>' +
-          '</div></div>';
+          '</div></div>' +
+          (b.inquiries
+            ? '<div class="glass-strong stat-detail"><h3>Inquiries</h3><div class="row">' +
+              '<div class="item">Open<span class="big big-yellow">' + b.inquiries.open + '</span></div>' +
+              '<div class="item">Resolved<span class="big big-green">' + b.inquiries.resolved + '</span></div>' +
+              '</div></div>'
+            : '');
       })
       .catch(function(e) {
         grid.innerHTML = '<div class="err" style="grid-column:1/-1;">Error: ' + escapeHtml(e.message) + '</div>';
@@ -910,12 +1009,16 @@ export function renderDashboardHtml() {
   $$('[data-rep-status]').forEach(function(t) {
     t.addEventListener('click', function() { setRepStatus(t.dataset.repStatus); });
   });
+  $$('[data-inq-status]').forEach(function(t) {
+    t.addEventListener('click', function() { setInqStatus(t.dataset.inqStatus); });
+  });
   $('#refreshBtn').addEventListener('click', function() { load(currentView); });
   $('#places-search-btn').addEventListener('click', loadPlaces);
   $('#places-search').addEventListener('keydown', function(e) { if (e.key === 'Enter') loadPlaces(); });
 
   setSubStatus('pending');
   setRepStatus('open');
+  setInqStatus('open');
   setView('submissions');
 </script>
 </body>

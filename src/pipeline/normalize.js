@@ -74,6 +74,41 @@ export function mergePlace(prev, fresh, { now, scrapeRunId, category, anchorId }
     return b.length > a.length ? b : a;
   };
 
+  // Admin-curated overrides take precedence over fresh scrape data.
+  //
+  // When a place was created via the admin dashboard (created_via ===
+  // 'admin_manual') OR an admin has explicitly pinned curated values
+  // on a scraped place, we don't want the next cron scrape to undo
+  // their work. Concretely:
+  //
+  //   - Admin types title="Ataa Hospital" on a submission whose
+  //     scrape returned no title. Two days later the scraper finally
+  //     finds the place at those coordinates and tries to write
+  //     title="Some other Google label". Without this guard, the
+  //     admin's title gets clobbered every cron run.
+  //
+  // Identity fields we preserve when admin-curated:
+  //   - title, type, address, phone, primary_slug, thumbnail
+  //
+  // We still apply fresh dynamics on every run:
+  //   - rating, reviews, gps_coordinates, photos, reviews data,
+  //     opening hours, source_anchors (so we know where it surfaced)
+  //
+  // The `last_admin_update_at` timestamp lets mobile show an "updated
+  // by admin" hint on submission-owner cards.
+  const isAdminPinned = prev?.created_via === 'admin_manual' ||
+      prev?.admin_pinned_fields?.length > 0;
+  const adminFields = {};
+  if (isAdminPinned) {
+    const pinned = new Set(
+      prev?.admin_pinned_fields ||
+          ['title', 'type', 'address', 'phone', 'primary_slug', 'thumbnail']
+    );
+    for (const f of pinned) {
+      if (prev?.[f] != null) adminFields[f] = prev[f];
+    }
+  }
+
   const merged = {
     ...fresh,
     position: Number.isFinite(bestPosition) ? bestPosition : fresh.position,
@@ -94,7 +129,28 @@ export function mergePlace(prev, fresh, { now, scrapeRunId, category, anchorId }
     ...(prev?.classification ? { classification: prev.classification } : {}),
     ...(prev?.attributes ? { attributes: prev.attributes } : {}),
     ...(prev?.primary_slug ? { primary_slug: prev.primary_slug } : {}),
+    // Admin-curated fields ALWAYS win — this spread comes last so it
+    // overrides any equivalents from `fresh` above.
+    ...adminFields,
+    // Preserve provenance flags so subsequent runs keep recognising
+    // this as admin-curated.
+    ...(prev?.created_via ? { created_via: prev.created_via } : {}),
+    ...(prev?.created_by_uid ? { created_by_uid: prev.created_by_uid } : {}),
+    ...(prev?.submission_id ? { submission_id: prev.submission_id } : {}),
+    ...(prev?.admin_pinned_fields
+        ? { admin_pinned_fields: prev.admin_pinned_fields }
+        : {}),
   };
+  // If admin fields exist + the scraper produced different values for
+  // any of them, stamp last_admin_update_at so the mobile knows to
+  // surface an "updated by admin" badge to the submitter.
+  if (isAdminPinned) {
+    let differs = false;
+    for (const [k, v] of Object.entries(adminFields)) {
+      if (fresh?.[k] != null && fresh[k] !== v) { differs = true; break; }
+    }
+    if (differs) merged.last_admin_update_at = now;
+  }
 
   // Drop fields with no value so the document stays lean.
   for (const k of Object.keys(merged)) if (merged[k] === undefined) delete merged[k];

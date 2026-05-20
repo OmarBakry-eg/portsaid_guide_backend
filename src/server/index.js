@@ -29,6 +29,7 @@ import { requireAuth } from './middleware/firebase-auth.js';
 import { makeSubmitPlaceHandler } from './routes/submit-place.js';
 import { makeSupportContactHandler } from './routes/support-contact.js';
 import { makeReportPlaceHandler } from './routes/report-place.js';
+import { makeInquireHandler } from './routes/inquire-place.js';
 import { mountDashboard } from './dashboard/index.js';
 
 const STORE_PATH = new URL('../../data/places.json', import.meta.url).pathname;
@@ -742,6 +743,12 @@ app.post('/places/submit', requireAuth(), makeSubmitPlaceHandler());
 // ----- Support contact + place report (auth-gated; Resend-backed) -----
 app.post('/support/contact', requireAuth(), makeSupportContactHandler());
 app.post('/places/:placeId/report', requireAuth(), makeReportPlaceHandler());
+
+// ----- User inquiries about their submitted/approved/rejected places -----
+// Auth-gated, stores to `place_inquiries/` for the admin dashboard.
+// Mobile also opens a mailto: from the user's own mail app so the
+// admin receives a notification email without us paying for SMTP.
+app.post('/places/inquire', requireAuth(), makeInquireHandler());
 
 // ----- /omar-dash — server-rendered admin dashboard (basic auth) ------
 // Mounts GET /omar-dash + GET/POST /omar-dash/api/* routes for managing

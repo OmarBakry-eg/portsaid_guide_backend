@@ -147,6 +147,60 @@ export async function listReports({ status = 'open', limit = 100 }) {
   });
 }
 
+/// List user inquiries. Each inquiry is a free-text question/concern
+/// the user sent from the mobile app about one of their submitted /
+/// approved / rejected places. Newest first.
+export async function listInquiries({ status = 'open', limit = 100 }) {
+  const db = await getDb();
+  let q = db
+      .collection('place_inquiries')
+      .orderBy('created_at', 'desc')
+      .limit(limit);
+  if (status && status !== 'all') {
+    q = db
+        .collection('place_inquiries')
+        .where('status', '==', status)
+        .orderBy('created_at', 'desc')
+        .limit(limit);
+  }
+  const snap = await q.get();
+  return snap.docs.map((d) => {
+    const r = d.data();
+    return {
+      id: d.id,
+      user_uid: r.user_uid,
+      user_email: r.user_email,
+      user_name: r.user_name,
+      place_id: r.place_id,
+      submission_id: r.submission_id,
+      subject: r.subject,
+      body: r.body,
+      status: r.status,
+      created_at: r.created_at_iso ||
+          (r.created_at?.toDate?.()?.toISOString?.() || null),
+      resolved_at: r.resolved_at?.toDate?.()?.toISOString?.() || null,
+      admin_response: r.admin_response || null,
+    };
+  });
+}
+
+/// Mark an inquiry as resolved. Optional `response` is stored so the
+/// admin can keep a record of what they did — surfaced read-only on
+/// the dashboard. (We don't email the user from here; if they want a
+/// reply they should reach out from their mailto reply chain.)
+export async function resolveInquiry(id, { response } = {}) {
+  const db = await getDb();
+  await db
+      .collection('place_inquiries')
+      .doc(id)
+      .update({
+        status: 'resolved',
+        resolved_at: new Date(),
+        admin_response: response ? String(response).trim().slice(0, 2000) : null,
+      });
+  return { id };
+}
+
 /// Mark a report as resolved.
 export async function resolveReport(id) {
   const db = await getDb();
@@ -170,6 +224,8 @@ export async function getStats() {
     submissionsDuplicate,
     reportsOpen,
     reportsResolved,
+    inquiriesOpen,
+    inquiriesResolved,
   ] = await Promise.all([
     db.collection('places').count().get(),
     db.collection('users').count().get(),
@@ -203,6 +259,18 @@ export async function getStats() {
         .where('status', '==', 'resolved')
         .count()
         .get(),
+    db
+        .collection('place_inquiries')
+        .where('status', '==', 'open')
+        .count()
+        .get()
+        .catch(() => ({ data: () => ({ count: 0 }) })),
+    db
+        .collection('place_inquiries')
+        .where('status', '==', 'resolved')
+        .count()
+        .get()
+        .catch(() => ({ data: () => ({ count: 0 }) })),
   ]);
   return {
     places: placesCount.data().count,
@@ -216,6 +284,10 @@ export async function getStats() {
     reports: {
       open: reportsOpen.data().count,
       resolved: reportsResolved.data().count,
+    },
+    inquiries: {
+      open: inquiriesOpen.data().count,
+      resolved: inquiriesResolved.data().count,
     },
   };
 }

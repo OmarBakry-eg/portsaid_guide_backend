@@ -40,6 +40,8 @@ import {
   listUsers,
   listReports,
   resolveReport,
+  listInquiries,
+  resolveInquiry,
   getStats,
 } from './admin-queries.js';
 import { renderDashboardHtml } from './views/dashboard-html.js';
@@ -241,6 +243,29 @@ export function mountDashboard(app) {
     basicAuthGate,
     jsonHandler(async (req, res) => {
       const out = await resolveReport(req.params.id);
+      res.json({ ok: true, ...out });
+    })
+  );
+
+  app.get(
+    '/omar-dash/api/inquiries',
+    basicAuthGate,
+    jsonHandler(async (req, res) => {
+      const items = await listInquiries({
+        status: (req.query.status || 'open').toString(),
+        limit: Math.min(parseInt(req.query.limit || '100', 10), 500),
+      });
+      res.json({ ok: true, count: items.length, items });
+    })
+  );
+
+  app.post(
+    '/omar-dash/api/inquiries/:id/resolve',
+    basicAuthGate,
+    jsonHandler(async (req, res) => {
+      const out = await resolveInquiry(req.params.id, {
+        response: req.body?.response,
+      });
       res.json({ ok: true, ...out });
     })
   );

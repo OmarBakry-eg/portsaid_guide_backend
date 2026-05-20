@@ -1,27 +1,37 @@
-// Google Maps URL → place_id resolver.
+// Maps URL → place_id resolver.
 //
 // Users paste a URL in the mobile app; this module parses it into a
 // canonical place_id we can match against `places/` in Firestore.
 //
-// Google Maps share URLs come in several flavours:
+// Supports both Google Maps and Apple Maps share formats:
 //
-//   1. Short:  https://maps.app.goo.gl/<token>
+//   1. Google short:  https://maps.app.goo.gl/<token>
 //      → Resolve via HTTP follow-redirect to the long form, then reparse.
 //
-//   2. Long with CID hex pair (the most common share format):
+//   2. Google long form with CID hex pair (the most common share format):
 //      https://www.google.com/maps/place/<Name>/@<lat>,<lng>,<zoom>z/
 //        data=!4m...!1s0x14f99c7168c84899:0x5fd1f5b2c2e0edf6!8m2!3d<lat>!4d<lng>!16s%2Fg%2F<g_id>
 //      → Extract the hex pair after `!1s` AND the decimal coords
 //        after `!8m2!3d<lat>!4d<lng>`.
 //
-//   3. Numeric CID query: https://maps.google.com/?cid=<decimal>
+//   3. Google numeric CID query: https://maps.google.com/?cid=<decimal>
 //      → Decimal CID. Convert to hex pair: low 64 bits of CID maps
 //        to the second half of the hex pair; we can't reconstruct
 //        the first half without a network lookup. So we treat this
 //        as a "needs scraping" form (Playwright resolution).
 //
-//   4. Search query only:  https://www.google.com/maps?q=...
+//   4. Google search query only:  https://www.google.com/maps?q=...
 //      → No specific place identifier; reject with a friendly error.
+//
+//   5. Apple Maps long form:
+//      https://maps.apple.com/place?place-id=IBC14CF7EA612C25C&name=Ataa+Hospital&coordinate=31.261636,32.285680&address=...
+//      → Parse query params directly: place-id is Apple's internal id
+//        (NOT cross-compatible with Google), but coordinate + name are
+//        enough to (a) check our duplicates by geo, and (b) drive a
+//        scrape against those coordinates.
+//
+//   6. Apple Maps short:  https://maps.apple/p/<token>  (or maps.apple.com/p/)
+//      → Resolve via HTTP follow-redirect, then reparse.
 //
 // The resolver's job is to produce as much identifying data as it
 // can WITHOUT making network calls. The caller (submission endpoint)
@@ -53,15 +63,19 @@ export function parseGoogleMapsUrl(input) {
   }
   const host = url.hostname.toLowerCase();
   const path = url.pathname;
-  const isMaps =
+  const isGoogle =
     host === 'maps.google.com' ||
     host === 'www.google.com' ||
     host === 'google.com' ||
     host === 'maps.app.goo.gl';
-  if (!isMaps) {
+  const isApple =
+    host === 'maps.apple.com' ||
+    host === 'maps.apple' ||
+    host === 'beta.maps.apple.com';
+  if (!isGoogle && !isApple) {
     return {
       rejection:
-        'That URL isn\'t a Google Maps link. Paste a maps.google.com or maps.app.goo.gl link.',
+        'That URL isn\'t a Google or Apple Maps link. Paste a maps.google.com / maps.app.goo.gl / maps.apple.com link.',
     };
   }
   if (host === 'maps.app.goo.gl') {
@@ -70,6 +84,24 @@ export function parseGoogleMapsUrl(input) {
       is_short_url: true,
       short_url: url.toString(),
     };
+  }
+  // Apple short links — same redirect-follow pattern as Google's short
+  // links. Apple uses both maps.apple.com/p/<token> and the bare
+  // maps.apple/p/<token> form (the latter is used in some shares).
+  if (isApple && /^\/p\//.test(path)) {
+    return {
+      kind: 'short',
+      is_short_url: true,
+      short_url: url.toString(),
+    };
+  }
+  // Apple long form — /place?place-id=...&name=...&coordinate=lat,lon
+  // We treat Apple URLs separately from Google because:
+  //   - place-id values are Apple-internal (no Google cross-reference).
+  //   - Coordinates and the name come straight from the query string,
+  //     no path decoding tricks needed.
+  if (isApple) {
+    return parseAppleMapsUrl(url);
   }
   // 4. Search query only — reject early. /maps?q=... is a "search the
   // map" URL, not a specific place.
@@ -135,6 +167,52 @@ export function parseGoogleMapsUrl(input) {
   return {
     rejection:
       'Couldn\'t identify a place in that URL. Open the place on Google Maps and use the Share button.',
+  };
+}
+
+/// Apple Maps URL parser. Reads place-id, name, address, coordinate
+/// query params. Apple's place-id is a base64-like token and isn't
+/// cross-compatible with Google's place_id — we keep it under
+/// `apple_place_id` so the caller knows to use coordinates for
+/// matching against Google-scraped entries.
+function parseAppleMapsUrl(url) {
+  const q = url.searchParams;
+  const applePlaceId = q.get('place-id') || null;
+  const name = q.get('name')
+      ? decodeURIComponent(q.get('name')).replace(/\+/g, ' ')
+      : null;
+  const address = q.get('address')
+      ? decodeURIComponent(q.get('address')).replace(/\+/g, ' ')
+      : null;
+  const coord = q.get('coordinate');
+  let lat = null;
+  let lon = null;
+  if (coord && coord.includes(',')) {
+    const [latStr, lonStr] = coord.split(',', 2);
+    const latN = parseFloat(latStr);
+    const lonN = parseFloat(lonStr);
+    if (Number.isFinite(latN) && Number.isFinite(lonN)) {
+      lat = latN;
+      lon = lonN;
+    }
+  }
+  if (lat == null && !applePlaceId) {
+    return {
+      rejection:
+        'Couldn\'t parse a place from that Apple Maps link. Try sharing the place from Maps again.',
+    };
+  }
+  return {
+    kind: 'apple_long',
+    apple_place_id: applePlaceId,
+    // Apple URLs don't carry the Google hex pair; leave it null so the
+    // submission handler falls through to geo-proximity matching +
+    // (eventually) a Playwright scrape.
+    place_hex_pair: null,
+    lat,
+    lon,
+    name_hint: name,
+    address_hint: address,
   };
 }
 
