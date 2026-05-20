@@ -1311,7 +1311,57 @@ export function renderDashboardHtml() {
               '<div class="item">Open<span class="big big-yellow">' + b.inquiries.open + '</span></div>' +
               '<div class="item">Resolved<span class="big big-green">' + b.inquiries.resolved + '</span></div>' +
               '</div></div>'
-            : '');
+            : '') +
+          // ── Catalogue maintenance ──
+          // Reconcile is a recovery + safety net. Use it after fixing a
+          // bug in approve/hot-insert, after a direct Firestore edit
+          // to source_categories, or just to verify health periodically.
+          '<div class="glass-strong stat-detail">' +
+            '<h3>Catalogue maintenance</h3>' +
+            '<div style="font-size:12px;color:rgba(255,255,255,0.6);margin-bottom:10px;">' +
+              'Approved places that didn\\'t make it into the buckets (because the hot-insert failed or pre-dated this code) get spliced in. 5-minute cooldown.' +
+            '</div>' +
+            '<button id="reconcile-btn" class="btn btn-primary">Reconcile catalogue</button>' +
+            '<div id="reconcile-status" class="status-msg" style="margin-top:10px;"></div>' +
+          '</div>';
+
+        // Wire the reconcile button (idempotent — re-render of stats
+        // creates a new button each time so we don't track state).
+        var rcBtn = $('#reconcile-btn');
+        var rcStatus = $('#reconcile-status');
+        if (rcBtn) {
+          rcBtn.addEventListener('click', function() {
+            rcBtn.disabled = true;
+            rcBtn.textContent = 'Reconciling…';
+            rcStatus.textContent = 'Scanning places ↔ buckets…';
+            rcStatus.className = 'status-msg';
+            fetch('/omar-dash/api/catalogue/reconcile', {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { 'Content-Type': 'application/json' },
+              body: '{}',
+            })
+              .then(function(r) { return r.json(); })
+              .then(function(d) {
+                if (!d.ok) throw new Error(d.error || 'failed');
+                var msg = 'Reconciled ' + d.reconciled + ' of ' + d.missing_count +
+                  ' missing places (places=' + d.places_total + ', bucketed=' + d.bucketed_total + ').';
+                if (d.skipped_rejected > 0) {
+                  msg += ' ' + d.skipped_rejected + ' skipped (not in Port Said / no coords).';
+                }
+                rcStatus.textContent = msg;
+                rcStatus.className = 'status-msg ok';
+              })
+              .catch(function(e) {
+                rcStatus.textContent = 'Reconcile failed: ' + e.message;
+                rcStatus.className = 'status-msg err';
+              })
+              .finally(function() {
+                rcBtn.disabled = false;
+                rcBtn.textContent = 'Reconcile catalogue';
+              });
+          });
+        }
       })
       .catch(function(e) {
         grid.innerHTML = '<div class="err" style="grid-column:1/-1;">Error: ' + escapeHtml(e.message) + '</div>';

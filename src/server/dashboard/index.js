@@ -47,6 +47,7 @@ import {
 } from './admin-queries.js';
 import { broadcastNotification } from './notifications.js';
 import { getFirestore } from '../../pipeline/firestore.js';
+import { reconcileCatalogue } from '../../catalogue/reconcile.js';
 import { renderDashboardHtml } from './views/dashboard-html.js';
 
 /// Admin credentials. Defaults match the product spec; env vars
@@ -296,6 +297,33 @@ export function mountDashboard(app) {
         deepPlaceId: body.place_id,
       });
       res.json({ ok: true, ...result });
+    })
+  );
+
+  // Catalogue reconciliation — finds places in places/ that aren't in
+  // any catalogue_buckets/* and hot-inserts them. Use to recover from
+  // approvals made before the hot-insert code shipped, or to fix any
+  // future silent hot-insert failure. 5-minute server-side cooldown
+  // to prevent button-mashing from racking up Firestore reads.
+  let lastReconcileAt = 0;
+  app.post(
+    '/omar-dash/api/catalogue/reconcile',
+    basicAuthGate,
+    jsonHandler(async (_req, res) => {
+      const cooldownMs = 5 * 60 * 1000;
+      const elapsed = Date.now() - lastReconcileAt;
+      if (elapsed < cooldownMs) {
+        const waitSec = Math.ceil((cooldownMs - elapsed) / 1000);
+        return res.status(429).json({
+          ok: false,
+          error: `Cooldown — try again in ${waitSec}s.`,
+        });
+      }
+      lastReconcileAt = Date.now();
+      const db = await getFirestore();
+      const summary = await reconcileCatalogue(db);
+      console.log('[omar-dash] reconcile summary:', summary);
+      res.json({ ok: true, ...summary });
     })
   );
 
