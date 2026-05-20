@@ -232,6 +232,72 @@ export function renderDashboardHtml() {
   .stat-detail .big-red { color: #ff8a82; }
   .stat-detail .big-blue { color: #97b6ff; }
 
+  /* ── Edit panel (expanded submission) ───────────────────────── */
+  .edit-panel {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px dashed rgba(255,255,255,0.10);
+    display: grid; gap: 12px;
+  }
+  .edit-panel .raw-block {
+    background: rgba(0,0,0,0.25);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-family: ui-monospace, monospace;
+    font-size: 11px; color: rgba(255,255,255,0.7);
+    white-space: pre-wrap; word-break: break-word;
+    max-height: 240px; overflow-y: auto;
+  }
+  .edit-panel .form-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  @media (min-width: 640px) {
+    .edit-panel .form-grid { grid-template-columns: 1fr 1fr; }
+    .edit-panel .form-grid .full { grid-column: 1 / -1; }
+  }
+  .edit-panel label {
+    display: flex; flex-direction: column; gap: 4px;
+    font-size: 11px; color: rgba(255,255,255,0.5);
+    text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;
+  }
+  .edit-panel label input,
+  .edit-panel label select,
+  .edit-panel label textarea {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 13px;
+    color: white;
+    text-transform: none; letter-spacing: 0;
+    font-weight: 400;
+  }
+  .edit-panel label textarea { font-family: inherit; resize: vertical; }
+  .edit-panel .hint {
+    grid-column: 1 / -1;
+    font-size: 11px; color: rgba(255,255,255,0.4);
+  }
+  .edit-panel .existing-place {
+    grid-column: 1 / -1;
+    background: rgba(80,220,130,0.10);
+    border: 1px solid rgba(80,220,130,0.30);
+    color: #b5f0c7;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+  .edit-panel .save-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .edit-panel .status-msg {
+    grid-column: 1 / -1;
+    font-size: 12px;
+    min-height: 14px;
+  }
+  .edit-panel .status-msg.ok { color: #6cf09a; }
+  .edit-panel .status-msg.err { color: #ff8a82; }
+
   /* ── Empty / error states ───────────────────────────────────── */
   .empty {
     padding: 64px 24px; text-align: center;
@@ -408,14 +474,24 @@ export function renderDashboardHtml() {
     var noteBlock = it.admin_note
       ? '<div class="note-block"><span style="color:rgba(255,255,255,0.7);">Note:</span> ' + escapeHtml(it.admin_note) + '</div>'
       : '';
-    var actions = it.status === 'pending'
-      ? '<div class="card-footer" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;">' +
-        '<button class="btn btn-primary approve-btn" data-id="' + it.id + '">Approve & add</button>' +
-        '<button class="btn btn-danger reject-btn" data-id="' + it.id + '">Reject</button>' +
-        '</div>'
-      : '<div style="margin-top:12px;font-size:11px;color:rgba(255,255,255,0.4);">Resolved ' + fmtDate(it.resolved_at) +
-        (it.resolved_by ? ' by ' + escapeHtml(it.resolved_by) : '') + '</div>';
-    return '<div class="glass-strong card">' +
+    // Action row — every status gets a "Details / edit" toggle. Only
+    // pending submissions get the Approve/Reject buttons; resolved
+    // ones show their resolution metadata but the details panel is
+    // still available so admins can audit what got recorded.
+    var resolved = it.status !== 'pending'
+      ? '<div style="margin-top:8px;font-size:11px;color:rgba(255,255,255,0.4);">Resolved ' + fmtDate(it.resolved_at) +
+        (it.resolved_by ? ' by ' + escapeHtml(it.resolved_by) : '') + '</div>'
+      : '';
+    var pendingBtns = it.status === 'pending'
+      ? '<button class="btn btn-primary approve-btn" data-id="' + it.id + '">Approve &amp; add</button>' +
+        '<button class="btn btn-danger reject-btn" data-id="' + it.id + '">Reject</button>'
+      : '';
+    var actions =
+      '<div class="card-footer" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;">' +
+      pendingBtns +
+      '<button class="btn btn-ghost details-btn" data-id="' + it.id + '">Details / edit</button>' +
+      '</div>';
+    return '<div class="glass-strong card" data-card-id="' + it.id + '">' +
       '<div class="head"><span class="pill pill-' + it.status + '">' + it.status.toUpperCase() + '</span>' +
       '<span class="meta">' + fmtDate(it.submitted_at) + '</span></div>' +
       '<h3 class="title">' + escapeHtml(it.extracted_title || '(no extracted title)') + '</h3>' +
@@ -423,7 +499,8 @@ export function renderDashboardHtml() {
         ? '<div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:4px;font-family:ui-monospace,monospace;">place_id: ' + escapeHtml(it.extracted_place_id) + '</div>'
         : '') +
       '<div style="margin-top:8px;font-size:12px;"><a class="url" href="' + escapeHtml(it.submitted_url) + '" target="_blank" rel="noopener">' + escapeHtml(it.submitted_url) + '</a></div>' +
-      aiBlock + noteBlock + actions +
+      aiBlock + noteBlock + resolved + actions +
+      '<div class="edit-panel-mount" data-mount-id="' + it.id + '" style="display:none;"></div>' +
       '</div>';
   }
   function loadSubmissions() {
@@ -472,6 +549,210 @@ export function renderDashboardHtml() {
           .then(function(d) { if (!d.ok) throw new Error(d.error); loadSubmissions(); })
           .catch(function(e) { alert('Reject failed: ' + e.message); b.disabled = false; b.textContent = 'Reject'; });
       });
+    });
+    $$('.details-btn').forEach(function(b) {
+      b.addEventListener('click', function() {
+        toggleDetails(b.dataset.id, b);
+      });
+    });
+  }
+
+  // ── Submission detail / edit panel ──────────────────────────────
+  //
+  // toggleDetails(id, button): show or hide the inline edit panel
+  // under the submission card. On first open we fetch the full doc
+  // via GET /api/submissions/:id and render a form prefilled with
+  // current values (extracted_* from scrape, or manual.* if the
+  // admin previously edited). Save → PATCH; Approve here uses the
+  // saved manual fields if the scrape produced nothing.
+  function toggleDetails(id, btn) {
+    var mount = document.querySelector('[data-mount-id="' + id + '"]');
+    if (!mount) return;
+    if (mount.style.display === 'block') {
+      mount.style.display = 'none';
+      btn.textContent = 'Details / edit';
+      return;
+    }
+    btn.textContent = 'Loading…'; btn.disabled = true;
+    fetch('/omar-dash/api/submissions/' + id, { credentials: 'same-origin' })
+      .then(function(r) { return r.json(); })
+      .then(function(b) {
+        if (!b.ok) throw new Error(b.error);
+        mount.innerHTML = renderEditPanel(b);
+        mount.style.display = 'block';
+        wireEditPanel(mount, id);
+      })
+      .catch(function(e) {
+        mount.innerHTML = '<div class="err">Couldn\\'t load details: ' + escapeHtml(e.message) + '</div>';
+        mount.style.display = 'block';
+      })
+      .finally(function() {
+        btn.disabled = false;
+        btn.textContent = 'Hide details';
+      });
+  }
+
+  // Render every raw field of the submission doc as read-only text,
+  // then a form for the editable subset. The form starts prefilled
+  // with manual.* values if present, otherwise with extracted_* /
+  // parsed-URL hints — so an admin opening a brand-new submission
+  // already sees lat/lon prefilled from the URL.
+  function renderEditPanel(detail) {
+    var raw = detail.raw || {};
+    var parsed = detail.parsed_url || {};
+    var manual = (raw.manual && typeof raw.manual === 'object') ? raw.manual : {};
+    var existing = detail.existing_place;
+
+    function field(label, name, value, opts) {
+      opts = opts || {};
+      var placeholder = opts.placeholder ? ' placeholder="' + escapeHtml(opts.placeholder) + '"' : '';
+      var cls = opts.full ? 'full' : '';
+      var v = value == null ? '' : value;
+      return '<label class="' + cls + '">' + escapeHtml(label) +
+        '<input data-field="' + name + '" value="' + escapeHtml(String(v)) + '"' + placeholder + '></label>';
+    }
+    function selectField(label, name, value, options) {
+      var opts = options.map(function(o) {
+        var sel = (String(value) === o) ? ' selected' : '';
+        return '<option value="' + escapeHtml(o) + '"' + sel + '>' + escapeHtml(o) + '</option>';
+      }).join('');
+      return '<label>' + escapeHtml(label) +
+        '<select data-field="' + name + '"><option value=""></option>' + opts + '</select></label>';
+    }
+
+    var rawJson = JSON.stringify(raw, null, 2);
+    var parsedJson = parsed && Object.keys(parsed).length
+        ? JSON.stringify(parsed, null, 2)
+        : '(URL re-parse not available)';
+
+    var existingBanner = existing
+      ? '<div class="existing-place">✓ A place with id <b>' + escapeHtml(existing.place_id) + '</b> already exists: <b>' +
+        escapeHtml(existing.title || '(no title)') + '</b> — approving will back-ref onto it (won\\'t overwrite the place data).</div>'
+      : '';
+
+    // Prefill priority: manual override > extracted (scrape) > parsed URL hint.
+    var pTitle = manual.title || raw.extracted_title || parsed.name_hint || '';
+    var pPlaceId = manual.place_id || raw.extracted_place_id || parsed.place_hex_pair || '';
+    var pLat = manual.lat != null ? manual.lat : (parsed.lat != null ? parsed.lat : '');
+    var pLon = manual.lon != null ? manual.lon : (parsed.lon != null ? parsed.lon : '');
+    var pType = manual.type || '';
+    var pPrimary = manual.primary_slug || (raw.ai_verdict && raw.ai_verdict.primary_slug) || '';
+    var pAddress = manual.address || '';
+    var pPhone = manual.phone || '';
+    var pThumb = manual.thumbnail || '';
+    var pRating = manual.rating != null ? manual.rating : '';
+    var pReviews = manual.reviews != null ? manual.reviews : '';
+    var pCats = Array.isArray(manual.source_categories)
+        ? manual.source_categories.join(', ')
+        : (raw.ai_verdict && Array.isArray(raw.ai_verdict.source_categories)
+            ? raw.ai_verdict.source_categories.join(', ')
+            : '');
+
+    var primarySlugOptions = [
+      'coffee','restaurant','fast-food','fish-seafood','bakery','dessert','candy-store',
+      'supermarket','grocery','mall','electronics','clothing','clothing-women','clothing-men','clothing-kids',
+      'shoe-store','jewelry','bookstore','stationery','gift-shop','toy-store','florist',
+      'pharmacy','clinic','hospital','dentist','veterinarian',
+      'hotel','hostel',
+      'bank','atm','money-exchange',
+      'beach','park','cinema','gym','tourist-attr','amusement-park','water-park','playground','arcade',
+      'mosque','church',
+      'gas-station','car-wash','auto-repair','car-rental','parking',
+      'other'
+    ];
+
+    return '<div class="edit-panel">' +
+      '<div class="form-grid">' +
+      existingBanner +
+      '<div class="hint">Edit the fields the scraper missed. Save to persist, then Approve to publish. Lat/Lon prefilled from the URL when available.</div>' +
+      field('Title', 'title', pTitle, { placeholder: 'Place name', full: true }) +
+      field('Place ID (Google hex pair, optional)', 'place_id', pPlaceId, { placeholder: '0x14f99c...:0x5fd1...' , full: true }) +
+      field('Latitude', 'lat', pLat, { placeholder: '31.2614' }) +
+      field('Longitude', 'lon', pLon, { placeholder: '32.2811' }) +
+      selectField('Primary slug (catalogue bucket)', 'primary_slug', pPrimary, primarySlugOptions) +
+      field('Type (Google business type)', 'type', pType, { placeholder: 'Coffee shop / Bank / Cinema…' }) +
+      field('Address', 'address', pAddress, { full: true }) +
+      field('Phone', 'phone', pPhone) +
+      field('Thumbnail URL', 'thumbnail', pThumb) +
+      field('Rating (0–5)', 'rating', pRating) +
+      field('Reviews count', 'reviews', pReviews) +
+      field('Source categories (comma-sep slugs)', 'source_categories', pCats, { full: true, placeholder: 'coffee, bakery' }) +
+      '<div class="save-row full">' +
+        '<button class="btn btn-ghost panel-save-btn" data-id="' + detail.id + '">Save edits</button>' +
+        (raw.status === 'pending'
+          ? '<button class="btn btn-primary panel-approve-btn" data-id="' + detail.id + '">Save &amp; approve</button>'
+          : '') +
+      '</div>' +
+      '<div class="status-msg" data-status-msg></div>' +
+      '</div>' +
+      '<details><summary style="cursor:pointer;font-size:12px;color:rgba(255,255,255,0.6);">Raw submission doc</summary>' +
+      '<div class="raw-block">' + escapeHtml(rawJson) + '</div></details>' +
+      '<details><summary style="cursor:pointer;font-size:12px;color:rgba(255,255,255,0.6);">Parsed URL hints</summary>' +
+      '<div class="raw-block">' + escapeHtml(parsedJson) + '</div></details>' +
+      '</div>';
+  }
+
+  function wireEditPanel(mount, id) {
+    var msg = mount.querySelector('[data-status-msg]');
+    function readForm() {
+      var manual = {};
+      $$('[data-field]', mount).forEach(function(el) {
+        var v = el.value;
+        if (v == null || v === '') return;
+        manual[el.dataset.field] = v;
+      });
+      return manual;
+    }
+    function setMsg(text, cls) {
+      if (!msg) return;
+      msg.textContent = text;
+      msg.className = 'status-msg ' + (cls || '');
+    }
+    function doSave() {
+      var manual = readForm();
+      setMsg('Saving…');
+      return fetch('/omar-dash/api/submissions/' + id, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manual: manual }),
+        credentials: 'same-origin',
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (!d.ok) throw new Error(d.error);
+          setMsg('Saved.', 'ok');
+        });
+    }
+    var saveBtn = mount.querySelector('.panel-save-btn');
+    if (saveBtn) saveBtn.addEventListener('click', function() {
+      saveBtn.disabled = true;
+      doSave()
+        .catch(function(e) { setMsg('Save failed: ' + e.message, 'err'); })
+        .finally(function() { saveBtn.disabled = false; });
+    });
+    var approveBtn = mount.querySelector('.panel-approve-btn');
+    if (approveBtn) approveBtn.addEventListener('click', function() {
+      approveBtn.disabled = true;
+      doSave()
+        .then(function() {
+          setMsg('Approving…');
+          return fetch('/omar-dash/api/submissions/' + id + '/approve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+            credentials: 'same-origin',
+          })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+              if (!d.ok) throw new Error(d.error);
+              setMsg('Approved as ' + (d.place_id || '(no id)') + '. Reloading…', 'ok');
+              setTimeout(loadSubmissions, 600);
+            });
+        })
+        .catch(function(e) {
+          setMsg('Approve failed: ' + e.message, 'err');
+          approveBtn.disabled = false;
+        });
     });
   }
 

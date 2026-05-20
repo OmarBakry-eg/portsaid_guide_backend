@@ -6,6 +6,9 @@
 // is best-effort; failure is logged but doesn't block the action.
 
 import { sendSubmissionDecisionEmail } from '../email.js';
+import { resolveUrl } from '../url-resolver.js';
+import { enrichWithScores } from '../../parsers/scoring.js';
+import { mainCategoryForSub } from '../../catalogue/main-of.js';
 //
 // Approve:
 //   - Re-fetch the submitted URL's place if extracted_place_id is set
@@ -70,33 +73,299 @@ export async function listSubmissions({ status, limit = 100 }) {
   });
 }
 
+/// Return the full raw submission doc for the editor panel. Includes
+/// every field stored on the doc, plus a re-parsed view of the
+/// submitted URL (lat/lon/hex pair) — admins use that to prefill
+/// manual edits when the scrape didn't produce title/place_id.
+export async function getSubmission(id) {
+  const db = await getDb();
+  const ref = db.collection('place_submissions').doc(id);
+  const snap = await ref.get();
+  if (!snap.exists) throw new Error(`submission ${id} not found`);
+  const raw = snap.data();
+
+  // Serialise Firestore Timestamps to ISO strings so the JSON we send
+  // to the browser is plain. We do this generically so any new field
+  // (resolved_at, scraped_at, etc.) survives without code changes.
+  const serialisable = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (v && typeof v === 'object' && typeof v.toDate === 'function') {
+      serialisable[k] = v.toDate().toISOString();
+    } else {
+      serialisable[k] = v;
+    }
+  }
+
+  // Re-parse the URL so the panel can show lat/lon/hex hints — useful
+  // when the scrape failed and the admin needs to fill those in. This
+  // is cheap (no network unless it's a short link).
+  let parsed = null;
+  if (raw.submitted_url) {
+    try {
+      parsed = await resolveUrl(raw.submitted_url);
+    } catch (e) {
+      parsed = { error: e.message || String(e) };
+    }
+  }
+
+  // Surface whether the resolved place_id (or manual override) is
+  // already in places/ — drives the "Approve will reuse existing doc"
+  // hint in the UI.
+  let existingPlace = null;
+  const candidatePlaceId =
+      raw.extracted_place_id || raw.manual?.place_id || null;
+  if (candidatePlaceId) {
+    try {
+      const placeSnap = await db
+          .collection('places')
+          .doc(candidatePlaceId)
+          .get();
+      if (placeSnap.exists) {
+        const p = placeSnap.data();
+        existingPlace = {
+          place_id: placeSnap.id,
+          title: p.title,
+          type: p.type,
+          primary_slug: p.primary_slug,
+          source_categories: p.source_categories || [],
+          rating: p.rating,
+          reviews: p.reviews,
+        };
+      }
+    } catch (_) {
+      // Non-fatal — the panel can render without this.
+    }
+  }
+
+  return {
+    id,
+    raw: serialisable,
+    parsed_url: parsed,
+    existing_place: existingPlace,
+  };
+}
+
+/// Patch a submission doc. We only allow editing a small whitelist of
+/// fields so an admin can't accidentally rewrite history (e.g.
+/// `submitted_by_uid` or `submitted_at`). The `manual` sub-object is
+/// the catch-all for fields that originally come from the scraper —
+/// title / lat / lon / type / address / phone / primary_slug — and is
+/// consumed by approveSubmission below when extracted_* is empty.
+const ALLOWED_PATCH_FIELDS = new Set([
+  'extracted_title',
+  'extracted_place_id',
+  'admin_note',
+  'manual', // nested object; see normaliseManual()
+]);
+
+const ALLOWED_MANUAL_FIELDS = new Set([
+  'title',
+  'place_id',
+  'type',
+  'primary_slug',
+  'lat',
+  'lon',
+  'address',
+  'phone',
+  'thumbnail',
+  'rating',
+  'reviews',
+  'source_categories', // array of sub-slugs
+]);
+
+function normaliseManual(input) {
+  if (!input || typeof input !== 'object') return {};
+  const out = {};
+  for (const [k, v] of Object.entries(input)) {
+    if (!ALLOWED_MANUAL_FIELDS.has(k)) continue;
+    if (v == null || v === '') continue;
+    if (k === 'lat' || k === 'lon' || k === 'rating') {
+      const n = parseFloat(v);
+      if (Number.isFinite(n)) out[k] = n;
+    } else if (k === 'reviews') {
+      const n = parseInt(v, 10);
+      if (Number.isFinite(n)) out[k] = n;
+    } else if (k === 'source_categories') {
+      out[k] = Array.isArray(v)
+          ? v.filter((s) => typeof s === 'string' && s.trim())
+          : String(v)
+              .split(',')
+              .map((s) => s.trim())
+              .filter(Boolean);
+    } else {
+      out[k] = String(v).trim();
+    }
+  }
+  return out;
+}
+
+export async function updateSubmission(id, patch) {
+  if (!patch || typeof patch !== 'object') {
+    throw new Error('patch body must be an object');
+  }
+  const db = await getDb();
+  const ref = db.collection('place_submissions').doc(id);
+  const snap = await ref.get();
+  if (!snap.exists) throw new Error(`submission ${id} not found`);
+
+  const update = {};
+  for (const [k, v] of Object.entries(patch)) {
+    if (!ALLOWED_PATCH_FIELDS.has(k)) continue;
+    if (k === 'manual') {
+      // Merge into existing manual block rather than overwrite — lets
+      // the admin save one field at a time without losing prior edits.
+      const existing = (snap.data().manual && typeof snap.data().manual === 'object')
+          ? snap.data().manual
+          : {};
+      update.manual = { ...existing, ...normaliseManual(v) };
+    } else {
+      update[k] = v == null ? null : String(v).trim();
+    }
+  }
+  update.last_edited_at = new Date();
+  await ref.update(update);
+  return { id, patched: Object.keys(update) };
+}
+
+/// Approve a submission. Two paths:
+///
+///   1. Scraper produced a place_id → the place already lives in
+///      places/. We just tag it with submitter info + back-ref.
+///
+///   2. Scraper failed (extracted_place_id is null) but the admin
+///      filled in a manual block → we synthesise a places/ doc from
+///      the manual fields + URL geo, with a synthetic place_id of
+///      'manual-<submissionId>'. The resulting doc has the same
+///      schema-shape as a scraped place, so the mobile reads it
+///      without special-casing.
+///
+/// Approve is idempotent: re-running it on an already-approved
+/// submission just refreshes the back-refs.
 export async function approveSubmission(id, { adminNote }) {
   const db = await getDb();
   const ref = db.collection('place_submissions').doc(id);
   const snap = await ref.get();
   if (!snap.exists) throw new Error(`submission ${id} not found`);
   const data = snap.data();
-  const placeId = data.extracted_place_id;
-  if (!placeId) {
-    throw new Error(
-      'submission has no extracted_place_id — needs manual scrape before approval'
-    );
-  }
+  const manual = (data.manual && typeof data.manual === 'object') ? data.manual : {};
+
+  // Pick the place_id: extracted (from scrape) > manual override >
+  // synthesised from the submission id. Synthesised ids are prefixed
+  // 'manual-' so they're easy to spot in queries and so they can't
+  // collide with Google's hex pairs (which never contain a dash).
+  let placeId =
+      data.extracted_place_id ||
+      manual.place_id ||
+      `manual-${id}`;
+
   const now = new Date();
-  // Tag the place doc with the submitter + submission back-ref.
-  await db.collection('places').doc(placeId).set(
-    {
+
+  // Does the place already exist?
+  const placeRef = db.collection('places').doc(placeId);
+  const placeSnap = await placeRef.get();
+
+  if (placeSnap.exists) {
+    // Path 1 — back-ref onto existing doc.
+    await placeRef.set(
+      {
+        created_by_uid: data.submitted_by_uid,
+        created_via: 'user_submission',
+        submission_id: id,
+      },
+      { merge: true }
+    );
+  } else {
+    // Path 2 — synthesise the place doc from manual + extracted +
+    // URL hints. Requires at minimum a title and coordinates so the
+    // mobile renders the card + maps marker correctly.
+    const parsed = data.submitted_url
+        ? await resolveUrl(data.submitted_url).catch(() => null)
+        : null;
+
+    const lat =
+        manual.lat ??
+        parsed?.lat ??
+        null;
+    const lon =
+        manual.lon ??
+        parsed?.lon ??
+        null;
+    const title =
+        manual.title ||
+        data.extracted_title ||
+        parsed?.name_hint ||
+        null;
+
+    if (!title) {
+      throw new Error(
+        'Cannot approve: no title. Fill in the title field, then try again.'
+      );
+    }
+    if (typeof lat !== 'number' || typeof lon !== 'number') {
+      throw new Error(
+        'Cannot approve: no coordinates. Fill in lat + lon (or paste a Maps URL that has them), then try again.'
+      );
+    }
+
+    // Primary slug — required for the mobile catalogue to bucket this
+    // place. If the admin didn't pick one, fall back to 'other' so
+    // approving never blocks (the place lands in the Other tab and
+    // can be re-classified later).
+    const primarySlug =
+        manual.primary_slug ||
+        (manual.source_categories?.[0]) ||
+        'other';
+    const sourceCategories =
+        Array.isArray(manual.source_categories) && manual.source_categories.length
+            ? manual.source_categories
+            : (primarySlug && primarySlug !== 'other' ? [primarySlug] : []);
+
+    const place = {
+      place_id: placeId,
+      title,
+      type: manual.type || null,
+      address: manual.address || null,
+      phone: manual.phone || null,
+      thumbnail: manual.thumbnail || null,
+      rating: manual.rating ?? null,
+      reviews: manual.reviews ?? null,
+      gps_coordinates: { latitude: lat, longitude: lon },
+      primary_slug: primarySlug,
+      source_categories: sourceCategories,
+      source_anchors: ['admin-manual'],
+      first_seen_at: now.toISOString(),
+      last_seen_at: now.toISOString(),
+      last_scraped_at: now.toISOString(),
+      last_changed_at: now.toISOString(),
+      last_scrape_run_id: 'admin-manual',
       created_by_uid: data.submitted_by_uid,
-      created_via: 'user_submission',
+      created_via: 'admin_manual',
       submission_id: id,
-    },
-    { merge: true }
-  );
-  // Mark submission approved.
+      classification: {
+        method: 'admin_manual',
+        confidence: 1.0,
+        reasoning: 'Admin filled in fields manually from dashboard.',
+      },
+      attributes: {},
+    };
+
+    // Drop nulls so the doc stays lean, then attach derived scoring
+    // fields (weighted_rating / quality_score / sort_score). Same
+    // shape every other place in the store has, so the mobile sort
+    // and quality filters keep working.
+    for (const k of Object.keys(place)) if (place[k] == null) delete place[k];
+    enrichWithScores(place);
+
+    await placeRef.set(place);
+  }
+
+  // Mark submission approved + record the placeId we settled on (so a
+  // re-approval picks the same id even if the manual fields change).
   await ref.update({
     status: 'approved',
     resolved_at: now,
     resolved_by: 'admin',
+    extracted_place_id: placeId, // pin it
     admin_note: adminNote || null,
   });
 
@@ -104,7 +373,7 @@ export async function approveSubmission(id, { adminNote }) {
   // user's email from users/{uid} since the submission row only
   // stores the uid.
   notifyDecision(db, data.submitted_by_uid, 'approved', {
-    placeTitle: data.extracted_title,
+    placeTitle: data.extracted_title || manual.title,
     reason: adminNote,
   }).catch((e) => console.warn('approve-email failed:', e.message));
 

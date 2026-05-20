@@ -18,6 +18,8 @@
 //                                          whether the module + all
 //                                          imports loaded cleanly
 //   GET  /omar-dash/api/submissions       → JSON of pending+history
+//   GET  /omar-dash/api/submissions/:id   → full raw doc + URL re-parse
+//   PATCH /omar-dash/api/submissions/:id  → edit allowed fields/manual
 //   POST /omar-dash/api/submissions/:id/approve
 //   POST /omar-dash/api/submissions/:id/reject
 //   GET  /omar-dash/api/places?main=&sub=&search=
@@ -30,6 +32,8 @@ import {
   approveSubmission,
   rejectSubmission,
   listSubmissions,
+  getSubmission,
+  updateSubmission,
 } from './admin-actions.js';
 import {
   listPlaces,
@@ -145,6 +149,31 @@ export function mountDashboard(app) {
       const limit = Math.min(parseInt(req.query.limit || '100', 10), 500);
       const list = await listSubmissions({ status, limit });
       res.json({ ok: true, status, count: list.length, items: list });
+    })
+  );
+
+  // Full raw submission doc (for the editor panel). Includes a re-
+  // parsed URL view (lat/lon/hex hints) when scrape failed.
+  app.get(
+    '/omar-dash/api/submissions/:id',
+    basicAuthGate,
+    jsonHandler(async (req, res) => {
+      const detail = await getSubmission(req.params.id);
+      res.json({ ok: true, ...detail });
+    })
+  );
+
+  // Patch a small whitelist of submission fields. Body shape:
+  //   { extracted_title?, extracted_place_id?, admin_note?, manual?: {...} }
+  // Manual sub-object accepts: title, place_id, type, primary_slug,
+  // lat, lon, address, phone, thumbnail, rating, reviews,
+  // source_categories. See ALLOWED_MANUAL_FIELDS in admin-actions.js.
+  app.patch(
+    '/omar-dash/api/submissions/:id',
+    basicAuthGate,
+    jsonHandler(async (req, res) => {
+      const out = await updateSubmission(req.params.id, req.body || {});
+      res.json({ ok: true, ...out });
     })
   );
 
