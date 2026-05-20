@@ -9,72 +9,127 @@ import { getFirestore } from '../../pipeline/firestore.js';
 // twice in a process throws "Firestore has already been initialized".
 const getDb = getFirestore;
 
-/// Paged list of places in the catalogue. Optional filter by main
-/// slug or sub slug. Returns shallow projection for the dashboard
-/// table — never the full doc.
+/// Server-side cache of the slim "place row" projection the dashboard
+/// table needs. Without this, every dashboard search had to pull the
+/// FULL `places/` collection from Firestore (4.4k reads per search) to
+/// even consider a substring match — and the previous behaviour was
+/// worse, fetching only the first 200 alphabetically (so "ZAK." was
+/// permanently invisible).
+///
+/// TTL: 5 minutes. Approvals via /omar-dash invalidate it eagerly so
+/// admins see their freshly-approved places without waiting; other
+/// changes (catalogue rebuild, direct Firestore edits) catch up at
+/// the TTL boundary.
+let _placesCache = null;
+let _placesCacheAt = 0;
+const PLACES_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/// Build the row projection from a Firestore doc. Same shape the old
+/// listPlaces returned, so the dashboard UI doesn't need to change.
+function rowFromDoc(d) {
+  const p = d.data();
+  return {
+    place_id: d.id,
+    title: p.title,
+    type: p.type,
+    primary_slug: p.primary_slug,
+    source_categories: p.source_categories || [],
+    rating: p.rating,
+    reviews: p.reviews,
+    thumbnail: p.thumbnail,
+    lat: p.gps_coordinates?.latitude,
+    lon: p.gps_coordinates?.longitude,
+    created_via: p.created_via || 'scraper',
+    created_by_uid: p.created_by_uid || null,
+    submission_id: p.submission_id || null,
+  };
+}
+
+/// Force the cache to drop. Called from approveSubmission so the next
+/// dashboard search sees the just-approved place even if it's still
+/// inside the 5-min TTL.
+export function invalidatePlacesCache() {
+  _placesCache = null;
+  _placesCacheAt = 0;
+}
+
+async function loadAllPlaceRows() {
+  const fresh = Date.now() - _placesCacheAt < PLACES_CACHE_TTL_MS;
+  if (_placesCache && fresh) return _placesCache;
+  const db = await getDb();
+  // No orderBy — every doc is needed so we want the full pass at
+  // minimum read cost. The dashboard table does its own sorting on
+  // the result.
+  const snap = await db.collection('places').get();
+  _placesCache = snap.docs.map(rowFromDoc);
+  _placesCacheAt = Date.now();
+  return _placesCache;
+}
+
+/// Filtered list of places for the dashboard table.
+///
+/// Filter semantics:
+///   - `search`: case-insensitive substring on title OR type OR
+///     primary_slug. Searches the FULL collection now (not just the
+///     first N alphabetically — that was the bug that hid "ZAK.").
+///   - `subSlug`: place.source_categories array-contains.
+///   - `mainSlug`: any sub-slug owned by this main appears in
+///     source_categories. Resolved against the bucket catalog.
+///
+/// Sort: title ascending, with null/empty titles sinking to the
+/// bottom (matches the previous behaviour).
+///
+/// Limit applied AFTER filtering so a search for "ZAK." doesn't get
+/// cut off by a low limit on the source set.
 export async function listPlaces({
   mainSlug,
   subSlug,
   search,
   limit = 100,
-  cursorPlaceId,
 }) {
-  const db = await getDb();
-  let q = db.collection('places').orderBy('title').limit(limit);
-  // Optional cursor for pagination by alphabetical title.
-  if (cursorPlaceId) {
-    const cursorSnap = await db.collection('places').doc(cursorPlaceId).get();
-    if (cursorSnap.exists) q = q.startAfter(cursorSnap);
-  }
-  // Filter by sub slug if provided (cheapest).
+  const rows = await loadAllPlaceRows();
+
+  let filtered = rows;
+
   if (subSlug) {
-    q = db
-        .collection('places')
-        .where('source_categories', 'array-contains', subSlug)
-        .orderBy('title')
-        .limit(limit);
+    filtered = filtered.filter((p) =>
+        Array.isArray(p.source_categories) &&
+        p.source_categories.includes(subSlug));
   }
-  const snap = await q.get();
-  const places = snap.docs.map((d) => {
-    const p = d.data();
-    return {
-      place_id: d.id,
-      title: p.title,
-      type: p.type,
-      primary_slug: p.primary_slug,
-      source_categories: p.source_categories || [],
-      rating: p.rating,
-      reviews: p.reviews,
-      thumbnail: p.thumbnail,
-      lat: p.gps_coordinates?.latitude,
-      lon: p.gps_coordinates?.longitude,
-      created_via: p.created_via || 'scraper',
-      created_by_uid: p.created_by_uid || null,
-      submission_id: p.submission_id || null,
-    };
-  });
-  // Apply optional client-side filters that Firestore can't do
-  // cheaply (substring search, mainSlug post-filter).
-  let filtered = places;
+
   if (mainSlug) {
-    // mainSlug doesn't live as a field on the doc — derive via the
-    // bucket catalog (lazy import to avoid circular).
+    // Lazy import to avoid circular.
     const { MAIN_CATEGORIES } = await import('../../catalogue/bucket.js');
     const main = MAIN_CATEGORIES.find((m) => m.slug === mainSlug);
     if (main) {
       const subSet = new Set(main.subSlugs);
       filtered = filtered.filter((p) =>
-        (p.source_categories || []).some((s) => subSet.has(s))
-      );
+          (p.source_categories || []).some((s) => subSet.has(s)));
     }
   }
+
   if (search) {
     const needle = search.toLowerCase();
-    filtered = filtered.filter((p) =>
-      (p.title || '').toLowerCase().includes(needle)
-    );
+    filtered = filtered.filter((p) => {
+      if ((p.title || '').toLowerCase().includes(needle)) return true;
+      if ((p.type || '').toLowerCase().includes(needle)) return true;
+      if ((p.primary_slug || '').toLowerCase().includes(needle)) return true;
+      // Substring against the place_id too — useful when an admin
+      // pastes a hex pair from the submission detail panel.
+      if ((p.place_id || '').toLowerCase().includes(needle)) return true;
+      return false;
+    });
   }
-  return filtered;
+
+  // Title-asc sort with empties last. Title can be undefined on a
+  // mid-write doc; default to '' so the comparator stays stable.
+  filtered.sort((a, b) => {
+    const ta = (a.title || '￿').toLowerCase();
+    const tb = (b.title || '￿').toLowerCase();
+    return ta < tb ? -1 : ta > tb ? 1 : 0;
+  });
+
+  return filtered.slice(0, limit);
 }
 
 /// List users by sign-up time (newest first). Includes a quick

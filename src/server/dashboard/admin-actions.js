@@ -10,6 +10,7 @@ import { resolveUrl } from '../url-resolver.js';
 import { enrichWithScores } from '../../parsers/scoring.js';
 import { mainCategoryForSub } from '../../catalogue/main-of.js';
 import { hotInsertPlaceIntoCatalogue } from '../../catalogue/hot-insert.js';
+import { invalidatePlacesCache } from './admin-queries.js';
 import {
   writeUserNotification,
   formatEditHeadline,
@@ -453,6 +454,11 @@ export async function approveSubmission(id, { adminNote }) {
   } catch (e) {
     console.warn('[approve] hot-insert failed:', e.message);
   }
+
+  // Drop the dashboard's places-list cache so an admin who searches
+  // immediately after approval sees the new place in the table
+  // without waiting for the 5-min TTL to expire.
+  invalidatePlacesCache();
 
   // Best-effort notification email to the submitter. Resolves the
   // user's email from users/{uid} since the submission row only

@@ -940,7 +940,13 @@ export function renderDashboardHtml() {
     var sub = $('#places-sub').value.trim();
     var tbody = $('#places-table tbody');
     tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">Loading…</td></tr>';
-    var params = new URLSearchParams({ limit: '200' });
+    // limit of 500 here gives every filtered result room to surface
+    // without forcing the admin to page. The server's listPlaces
+    // applies the limit AFTER filtering, so a substring search like
+    // "ZAK." returns the 1-3 matches it should — without the limit
+    // capping the source set BEFORE the filter (the old bug that
+    // made Z-titled places permanently invisible).
+    var params = new URLSearchParams({ limit: '500' });
     if (search) params.set('search', search);
     if (main) params.set('main', main);
     if (sub) params.set('sub', sub);
