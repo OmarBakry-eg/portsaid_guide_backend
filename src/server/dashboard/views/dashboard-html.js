@@ -406,6 +406,54 @@ export function renderDashboardHtml() {
   .send-form .user-list-row .uemail { color: rgba(255,255,255,0.55); font-size: 11.5px; }
   .send-form #send-user-picker[hidden] { display: none; }
 
+  /* ── Toasts ─────────────────────────────────────────────────── */
+  /* Floating non-blocking notifications. Used for API errors that
+     used to replace whole sections (e.g. quota exhaustion on stats).
+     The section UI stays put; the toast surfaces the error and self-
+     dismisses after 6s (or on click). Stacks vertically when several
+     fire at once. */
+  #toast-host {
+    position: fixed;
+    right: max(12px, env(safe-area-inset-right));
+    bottom: max(14px, env(safe-area-inset-bottom));
+    display: flex; flex-direction: column-reverse; gap: 8px;
+    z-index: 10000;
+    pointer-events: none;
+    max-width: min(90vw, 380px);
+  }
+  .toast {
+    pointer-events: auto;
+    padding: 11px 14px;
+    border-radius: 12px;
+    font-size: 12.5px; line-height: 1.4;
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.10);
+    background: rgba(20,24,36,0.85);
+    color: white;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.40);
+    cursor: pointer;
+    animation: toastIn 180ms ease-out;
+  }
+  .toast.err {
+    background: rgba(70,18,18,0.92);
+    border-color: rgba(255,100,100,0.40);
+  }
+  .toast.ok {
+    background: rgba(20,46,28,0.92);
+    border-color: rgba(80,220,130,0.40);
+  }
+  .toast .t-title { font-weight: 700; margin-bottom: 2px; }
+  .toast .t-body { color: rgba(255,255,255,0.78); font-size: 11.5px; }
+  @keyframes toastIn {
+    from { transform: translateY(8px); opacity: 0; }
+    to   { transform: translateY(0); opacity: 1; }
+  }
+  @keyframes toastOut {
+    from { transform: translateY(0); opacity: 1; }
+    to   { transform: translateY(8px); opacity: 0; }
+  }
+  .toast.dismissing { animation: toastOut 160ms ease-in forwards; }
+
   /* ── Empty / error states ───────────────────────────────────── */
   .empty {
     padding: 64px 24px; text-align: center;
@@ -567,10 +615,45 @@ export function renderDashboardHtml() {
   <footer class="app-footer">PortSaid Guide admin — protected by basic auth.</footer>
 </div>
 
+<!-- Toast host. Positioned fixed bottom-right; each .toast inside is
+     a floating notification. Used to surface errors that USED to
+     wipe whole sections (e.g. quota exhaustion on /api/stats). The
+     section UI now stays put; the toast carries the error message. -->
+<div id="toast-host" aria-live="polite" aria-atomic="true"></div>
+
 <script>
   // No external dependencies. All vanilla JS.
   var $ = function(s, r) { return (r || document).querySelector(s); };
   var $$ = function(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+
+  // Toasts. Surface a non-blocking message in the bottom-right.
+  // kind: 'err' | 'ok' | 'info' (info is the default neutral style).
+  // Auto-dismiss after 6 s OR on click. Same toast text within 4 s
+  // is de-duped so a retry loop doesn't spam the screen.
+  var _toastRecent = new Map(); // text → ts
+  function showToast(title, body, kind) {
+    var host = $('#toast-host');
+    if (!host) return;
+    var key = (title || '') + '||' + (body || '');
+    var now = Date.now();
+    var last = _toastRecent.get(key);
+    if (last && now - last < 4000) return; // dedupe burst-fires
+    _toastRecent.set(key, now);
+    var el = document.createElement('div');
+    el.className = 'toast' + (kind === 'err' ? ' err' : kind === 'ok' ? ' ok' : '');
+    el.innerHTML =
+      (title ? '<div class="t-title">' + escapeHtml(title) + '</div>' : '') +
+      (body ? '<div class="t-body">' + escapeHtml(body) + '</div>' : '');
+    var dismissed = false;
+    function dismiss() {
+      if (dismissed) return; dismissed = true;
+      el.classList.add('dismissing');
+      setTimeout(function() { try { host.removeChild(el); } catch(_) {} }, 200);
+    }
+    el.addEventListener('click', dismiss);
+    host.appendChild(el);
+    setTimeout(dismiss, 6000);
+  }
 
   function escapeHtml(s) {
     if (s == null) return '';
@@ -691,7 +774,10 @@ export function renderDashboardHtml() {
           : '<div class="glass-strong empty"><div class="empty-icon">📭</div>Nothing here yet.</div>';
         wireSubActions();
       })
-      .catch(function(e) { list.innerHTML = '<div class="err">Error: ' + escapeHtml(e.message) + '</div>'; });
+      .catch(function(e) {
+        list.innerHTML = '<div class="glass-strong empty"><div class="empty-icon">⚠️</div>Couldn\\'t load submissions. See the toast for details.</div>';
+        showToast('Couldn\\'t load submissions', friendlyApiError(e), 'err');
+      });
   }
   function wireSubActions() {
     $$('.approve-btn').forEach(function(b) {
@@ -970,7 +1056,8 @@ export function renderDashboardHtml() {
         }).join('');
       })
       .catch(function(e) {
-        tbody.innerHTML = '<tr><td colspan="5" class="err">Error: ' + escapeHtml(e.message) + '</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">Couldn\\'t load places. See toast for details.</td></tr>';
+        showToast('Couldn\\'t load places', friendlyApiError(e), 'err');
       });
   }
 
@@ -998,7 +1085,8 @@ export function renderDashboardHtml() {
         }).join('');
       })
       .catch(function(e) {
-        tbody.innerHTML = '<tr><td colspan="5" class="err">Error: ' + escapeHtml(e.message) + '</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">Couldn\\'t load users. See toast for details.</td></tr>';
+        showToast('Couldn\\'t load users', friendlyApiError(e), 'err');
       });
   }
 
@@ -1042,7 +1130,10 @@ export function renderDashboardHtml() {
           });
         });
       })
-      .catch(function(e) { list.innerHTML = '<div class="err">Error: ' + escapeHtml(e.message) + '</div>'; });
+      .catch(function(e) {
+        list.innerHTML = '<div class="glass-strong empty"><div class="empty-icon">⚠️</div>Couldn\\'t load reports. See toast for details.</div>';
+        showToast('Couldn\\'t load reports', friendlyApiError(e), 'err');
+      });
   }
 
   // ── Inquiries ──
@@ -1113,7 +1204,10 @@ export function renderDashboardHtml() {
           });
         });
       })
-      .catch(function(e) { list.innerHTML = '<div class="err">Error: ' + escapeHtml(e.message) + '</div>'; });
+      .catch(function(e) {
+        list.innerHTML = '<div class="glass-strong empty"><div class="empty-icon">⚠️</div>Couldn\\'t load inquiries. See toast for details.</div>';
+        showToast('Couldn\\'t load inquiries', friendlyApiError(e), 'err');
+      });
   }
 
   // ── Send (admin → user notifications) ──
@@ -1280,135 +1374,239 @@ export function renderDashboardHtml() {
   }
 
   // ── Stats ──
+  //
+  // State management rule: the stats fetch is decoupled from the
+  // section's UI shell. The shell — including the Catalogue
+  // maintenance + Reconcile button — is rendered up front in a
+  // single call to renderStatsShell() each time the user opens the
+  // tab. The data fetch then PATCHES individual numbers into the
+  // shell on success, or shows a toast + leaves '—' placeholders on
+  // failure (typical case: 8 RESOURCE_EXHAUSTED). Earlier the whole
+  // section disappeared on any /api/stats failure, taking the
+  // Reconcile button with it.
+  //
+  // Reconcile button state: re-rendered fresh every time the tab is
+  // opened. Click handler updates the CURRENT button via querySelector
+  // inside .then/.finally rather than a captured DOM reference, so a
+  // re-render during an in-flight request can't leave a stale
+  // disabled button behind.
   function loadStats() {
+    renderStatsShell();
+    hydrateReconcileStatus();
+    fetchStatsCounters();
+  }
+
+  // ── Reconcile helpers — shared across button + GET hydration ──
+  function formatReconcileSummary(d, opts) {
+    var msg = 'Reconciled ' + d.reconciled + ' of ' + d.missing_count +
+      ' missing places (places=' + d.places_total + ', bucketed=' + d.bucketed_total + ').';
+    if (d.skipped_rejected > 0) {
+      msg += ' ' + d.skipped_rejected + ' skipped (not in Port Said / no coords).';
+    }
+    if (opts && opts.cached) {
+      msg += ' Last run ' + agoLabel(d.seconds_since) + '.';
+    }
+    return msg;
+  }
+  function agoLabel(sec) {
+    if (typeof sec !== 'number' || sec < 0) return 'just now';
+    if (sec < 5) return 'just now';
+    if (sec < 60) return sec + 's ago';
+    if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
+    return Math.floor(sec / 3600) + 'h ago';
+  }
+
+  // Render the stats section skeleton — cards as '—' placeholders +
+  // the Catalogue maintenance section + button. ALWAYS runs to
+  // completion, regardless of network state. Re-runnable on every
+  // tab open without leaking handlers (we use querySelector inside
+  // the click handler, so stale closures aren't a problem).
+  function renderStatsShell() {
     var grid = $('#stats-grid');
     var detail = $('#stats-detail');
-    grid.innerHTML = '<div style="color:rgba(255,255,255,0.5);grid-column:1/-1;">Loading…</div>';
-    detail.innerHTML = '';
+
+    var cardLabels = [
+      'Places', 'Users', 'Pending submissions', 'Open reports', 'Open inquiries'
+    ];
+    grid.innerHTML = cardLabels.map(function(label, i) {
+      return '<div class="glass-strong stat-card" data-stat-card="' + i + '">' +
+        '<div class="stat-label">' + escapeHtml(label) + '</div>' +
+        '<div class="stat-num" data-stat-num="' + i + '">—</div></div>';
+    }).join('');
+
+    detail.innerHTML =
+      '<div class="glass-strong stat-detail"><h3>Submissions</h3><div class="row cols-4">' +
+        '<div class="item">Pending<span class="big big-yellow" data-stat="sub-pending">—</span></div>' +
+        '<div class="item">Approved<span class="big big-green" data-stat="sub-approved">—</span></div>' +
+        '<div class="item">Rejected<span class="big big-red" data-stat="sub-rejected">—</span></div>' +
+        '<div class="item">Duplicates<span class="big big-blue" data-stat="sub-duplicate">—</span></div>' +
+      '</div></div>' +
+      '<div class="glass-strong stat-detail"><h3>Reports</h3><div class="row">' +
+        '<div class="item">Open<span class="big big-red" data-stat="rep-open">—</span></div>' +
+        '<div class="item">Resolved<span class="big big-green" data-stat="rep-resolved">—</span></div>' +
+      '</div></div>' +
+      '<div class="glass-strong stat-detail"><h3>Inquiries</h3><div class="row">' +
+        '<div class="item">Open<span class="big big-yellow" data-stat="inq-open">—</span></div>' +
+        '<div class="item">Resolved<span class="big big-green" data-stat="inq-resolved">—</span></div>' +
+      '</div></div>' +
+      // ── Catalogue maintenance ──
+      // Reconcile is a recovery + safety net. Use it after fixing a
+      // bug in approve/hot-insert, after a direct Firestore edit to
+      // source_categories, or just to verify health periodically.
+      '<div class="glass-strong stat-detail">' +
+        '<h3>Catalogue maintenance</h3>' +
+        '<div style="font-size:12px;color:rgba(255,255,255,0.6);margin-bottom:10px;">' +
+          'Approved places that didn\\'t make it into the buckets (because the hot-insert failed or pre-dated this code) get spliced in. 60-second cooldown.' +
+        '</div>' +
+        '<button id="reconcile-btn" class="btn btn-primary">Reconcile catalogue</button>' +
+        '<div id="reconcile-status" class="status-msg" style="margin-top:10px;"></div>' +
+      '</div>';
+
+    // Wire the reconcile button. Note: the click handler resolves
+    // the button + status DOM nodes via querySelector EACH TIME a
+    // response lands. That means if the user navigates away mid-
+    // request and back (which re-runs renderStatsShell), the
+    // previous request's .then/.finally writes to a DOM node that
+    // no longer exists (silent no-op via the btnNow guard) instead
+    // of stranding the NEW button in a disabled state.
+    var rcBtn = $('#reconcile-btn');
+    if (rcBtn) {
+      rcBtn.addEventListener('click', function() {
+        rcBtn.disabled = true;
+        rcBtn.textContent = 'Reconciling…';
+        var rs = $('#reconcile-status');
+        if (rs) { rs.textContent = 'Scanning places ↔ buckets…'; rs.className = 'status-msg'; }
+        fetch('/omar-dash/api/catalogue/reconcile', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        })
+          .then(function(r) { return r.json(); })
+          .then(function(d) {
+            if (!d.ok) throw new Error(d.error || 'failed');
+            // Resolve the live nodes again — the user may have
+            // navigated away and the original rcBtn/rcStatus may
+            // be detached.
+            var btnNow = $('#reconcile-btn');
+            var statusNow = $('#reconcile-status');
+            if (statusNow) {
+              statusNow.textContent = formatReconcileSummary(d, { cached: !!d.cached });
+              statusNow.className = 'status-msg ok';
+            }
+            if (btnNow) {
+              btnNow.disabled = false;
+              btnNow.textContent = 'Reconcile catalogue';
+            }
+            showToast('Reconcile complete',
+                'Spliced ' + d.reconciled + ' place(s) into buckets.', 'ok');
+          })
+          .catch(function(e) {
+            var btnNow = $('#reconcile-btn');
+            var statusNow = $('#reconcile-status');
+            if (statusNow) {
+              statusNow.textContent = 'Reconcile failed: ' + e.message;
+              statusNow.className = 'status-msg err';
+            }
+            if (btnNow) {
+              btnNow.disabled = false;
+              btnNow.textContent = 'Reconcile catalogue';
+            }
+            showToast('Reconcile failed', friendlyApiError(e), 'err');
+          });
+      });
+    }
+  }
+
+  // Fetch the cached reconcile summary from the server-side memory
+  // store (no Firestore reads). Runs on every Stats tab open so the
+  // status line shows the last run's outcome — even after a tab
+  // switch + return.
+  function hydrateReconcileStatus() {
+    var rs = $('#reconcile-status');
+    if (!rs) return;
+    fetch('/omar-dash/api/catalogue/reconcile', {
+      method: 'GET',
+      credentials: 'same-origin',
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        var statusNow = $('#reconcile-status');
+        if (statusNow && d && d.summary) {
+          var s = Object.assign({}, d.summary, { seconds_since: d.seconds_since });
+          statusNow.textContent = formatReconcileSummary(s, { cached: true });
+          statusNow.className = 'status-msg ok';
+        }
+      })
+      .catch(function() { /* silent — first run, fresh server */ });
+  }
+
+  // Fetch the live counters and PATCH them into the shell. Failure
+  // here MUST NOT replace the shell — that was the bug that made the
+  // Reconcile button vanish whenever /api/stats hit a quota error.
+  function fetchStatsCounters() {
     fetch('/omar-dash/api/stats', { credentials: 'same-origin' })
       .then(function(r) { return r.json(); })
       .then(function(b) {
-        if (!b.ok) throw new Error(b.error);
-        var cards = [
-          ['Places', b.places],
-          ['Users', b.users],
-          ['Pending submissions', b.submissions.pending],
-          ['Open reports', b.reports.open],
-          ['Open inquiries', (b.inquiries && b.inquiries.open) || 0]
+        if (!b.ok) throw new Error(b.error || 'failed');
+        // Patch top cards in order.
+        var nums = [
+          b.places, b.users,
+          (b.submissions && b.submissions.pending) || 0,
+          (b.reports && b.reports.open) || 0,
+          (b.inquiries && b.inquiries.open) || 0
         ];
-        grid.innerHTML = cards.map(function(c) {
-          return '<div class="glass-strong stat-card">' +
-            '<div class="stat-label">' + escapeHtml(c[0]) + '</div>' +
-            '<div class="stat-num">' + c[1] + '</div></div>';
-        }).join('');
-        detail.innerHTML =
-          '<div class="glass-strong stat-detail"><h3>Submissions</h3><div class="row cols-4">' +
-          '<div class="item">Pending<span class="big big-yellow">' + b.submissions.pending + '</span></div>' +
-          '<div class="item">Approved<span class="big big-green">' + b.submissions.approved + '</span></div>' +
-          '<div class="item">Rejected<span class="big big-red">' + b.submissions.rejected + '</span></div>' +
-          '<div class="item">Duplicates<span class="big big-blue">' + b.submissions.duplicate + '</span></div>' +
-          '</div></div>' +
-          '<div class="glass-strong stat-detail"><h3>Reports</h3><div class="row">' +
-          '<div class="item">Open<span class="big big-red">' + b.reports.open + '</span></div>' +
-          '<div class="item">Resolved<span class="big big-green">' + b.reports.resolved + '</span></div>' +
-          '</div></div>' +
-          (b.inquiries
-            ? '<div class="glass-strong stat-detail"><h3>Inquiries</h3><div class="row">' +
-              '<div class="item">Open<span class="big big-yellow">' + b.inquiries.open + '</span></div>' +
-              '<div class="item">Resolved<span class="big big-green">' + b.inquiries.resolved + '</span></div>' +
-              '</div></div>'
-            : '') +
-          // ── Catalogue maintenance ──
-          // Reconcile is a recovery + safety net. Use it after fixing a
-          // bug in approve/hot-insert, after a direct Firestore edit
-          // to source_categories, or just to verify health periodically.
-          '<div class="glass-strong stat-detail">' +
-            '<h3>Catalogue maintenance</h3>' +
-            '<div style="font-size:12px;color:rgba(255,255,255,0.6);margin-bottom:10px;">' +
-              'Approved places that didn\\'t make it into the buckets (because the hot-insert failed or pre-dated this code) get spliced in. 60-second cooldown.' +
-            '</div>' +
-            '<button id="reconcile-btn" class="btn btn-primary">Reconcile catalogue</button>' +
-            '<div id="reconcile-status" class="status-msg" style="margin-top:10px;"></div>' +
-          '</div>';
-
-        // Wire the reconcile button (idempotent — re-render of stats
-        // creates a new button each time so we don't track state).
-        var rcBtn = $('#reconcile-btn');
-        var rcStatus = $('#reconcile-status');
-
-        // Helper — format a summary into one line of human-readable copy.
-        function formatReconcileSummary(d, opts) {
-          var msg = 'Reconciled ' + d.reconciled + ' of ' + d.missing_count +
-            ' missing places (places=' + d.places_total + ', bucketed=' + d.bucketed_total + ').';
-          if (d.skipped_rejected > 0) {
-            msg += ' ' + d.skipped_rejected + ' skipped (not in Port Said / no coords).';
-          }
-          if (opts && opts.cached) {
-            msg += ' Last run ' + agoLabel(d.seconds_since) + '.';
-          }
-          return msg;
+        nums.forEach(function(n, i) {
+          var el = document.querySelector('[data-stat-num="' + i + '"]');
+          if (el) el.textContent = n;
+        });
+        // Patch detail rows.
+        function setStat(key, value) {
+          var el = document.querySelector('[data-stat="' + key + '"]');
+          if (el) el.textContent = value;
         }
-
-        function agoLabel(sec) {
-          if (typeof sec !== 'number' || sec < 0) return 'just now';
-          if (sec < 5) return 'just now';
-          if (sec < 60) return sec + 's ago';
-          if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
-          return Math.floor(sec / 3600) + 'h ago';
+        if (b.submissions) {
+          setStat('sub-pending', b.submissions.pending || 0);
+          setStat('sub-approved', b.submissions.approved || 0);
+          setStat('sub-rejected', b.submissions.rejected || 0);
+          setStat('sub-duplicate', b.submissions.duplicate || 0);
         }
-
-        // On every Stats render, hydrate the status line from the
-        // SERVER's cached summary so users see what their previous
-        // click did, even after navigating away and back. Cheap —
-        // a single Firestore-free GET.
-        if (rcStatus) {
-          fetch('/omar-dash/api/catalogue/reconcile', {
-            method: 'GET',
-            credentials: 'same-origin',
-          })
-            .then(function(r) { return r.json(); })
-            .then(function(d) {
-              if (d && d.summary) {
-                var s = Object.assign({}, d.summary, { seconds_since: d.seconds_since });
-                rcStatus.textContent = formatReconcileSummary(s, { cached: true });
-                rcStatus.className = 'status-msg ok';
-              }
-            })
-            .catch(function() { /* silent — fresh-server case */ });
+        if (b.reports) {
+          setStat('rep-open', b.reports.open || 0);
+          setStat('rep-resolved', b.reports.resolved || 0);
         }
-
-        if (rcBtn) {
-          rcBtn.addEventListener('click', function() {
-            rcBtn.disabled = true;
-            rcBtn.textContent = 'Reconciling…';
-            rcStatus.textContent = 'Scanning places ↔ buckets…';
-            rcStatus.className = 'status-msg';
-            fetch('/omar-dash/api/catalogue/reconcile', {
-              method: 'POST',
-              credentials: 'same-origin',
-              headers: { 'Content-Type': 'application/json' },
-              body: '{}',
-            })
-              .then(function(r) { return r.json(); })
-              .then(function(d) {
-                if (!d.ok) throw new Error(d.error || 'failed');
-                rcStatus.textContent = formatReconcileSummary(d, { cached: !!d.cached });
-                rcStatus.className = 'status-msg ok';
-              })
-              .catch(function(e) {
-                rcStatus.textContent = 'Reconcile failed: ' + e.message;
-                rcStatus.className = 'status-msg err';
-              })
-              .finally(function() {
-                rcBtn.disabled = false;
-                rcBtn.textContent = 'Reconcile catalogue';
-              });
-          });
+        if (b.inquiries) {
+          setStat('inq-open', b.inquiries.open || 0);
+          setStat('inq-resolved', b.inquiries.resolved || 0);
         }
       })
       .catch(function(e) {
-        grid.innerHTML = '<div class="err" style="grid-column:1/-1;">Error: ' + escapeHtml(e.message) + '</div>';
+        // Leave the '—' placeholders in place. Show a toast so the
+        // admin knows something went wrong AND the reconcile button
+        // stays usable.
+        showToast(
+          'Couldn\\'t load stats',
+          friendlyApiError(e),
+          'err',
+        );
       });
+  }
+
+  // Translate the technical API errors that bubble out of fetch() +
+  // .then() into something an admin can act on. We keep the original
+  // message in parens for debugging.
+  function friendlyApiError(e) {
+    var raw = (e && e.message) || String(e || '');
+    if (/RESOURCE_EXHAUSTED|Quota exceeded/i.test(raw)) {
+      return 'Daily Firestore quota exhausted. Counts will refresh when the quota resets (midnight Pacific). Other admin actions still work.';
+    }
+    if (/permission-denied|UNAUTHENTICATED/i.test(raw)) {
+      return 'Permission denied. Re-authenticate the basic-auth challenge.';
+    }
+    if (/network|fetch|Failed to fetch/i.test(raw)) {
+      return 'Network issue. Check your connection and try again.';
+    }
+    return raw;
   }
 
   // ── Wire-up ──
