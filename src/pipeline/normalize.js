@@ -102,7 +102,7 @@ export function mergePlace(prev, fresh, { now, scrapeRunId, category, anchorId }
   if (isAdminPinned) {
     const pinned = new Set(
       prev?.admin_pinned_fields ||
-          ['title', 'type', 'address', 'phone', 'primary_slug', 'thumbnail']
+          ['title', 'type', 'address', 'phone', 'website', 'primary_slug', 'thumbnail']
     );
     for (const f of pinned) {
       if (prev?.[f] != null) adminFields[f] = prev[f];

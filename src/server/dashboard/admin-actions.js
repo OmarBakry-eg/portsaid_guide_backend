@@ -167,6 +167,7 @@ const ALLOWED_MANUAL_FIELDS = new Set([
   'lon',
   'address',
   'phone',
+  'website',
   'thumbnail',
   'rating',
   'reviews',
@@ -329,6 +330,7 @@ export async function approveSubmission(id, { adminNote }) {
     if (manual.type) pinned.push('type');
     if (manual.address) pinned.push('address');
     if (manual.phone) pinned.push('phone');
+    if (manual.website) pinned.push('website');
     if (manual.primary_slug) pinned.push('primary_slug');
     if (manual.thumbnail) pinned.push('thumbnail');
 
@@ -338,6 +340,7 @@ export async function approveSubmission(id, { adminNote }) {
       type: manual.type || null,
       address: manual.address || null,
       phone: manual.phone || null,
+      website: manual.website || null,
       thumbnail: manual.thumbnail || null,
       rating: manual.rating ?? null,
       reviews: manual.reviews ?? null,

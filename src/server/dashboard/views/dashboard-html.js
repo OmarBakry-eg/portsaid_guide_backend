@@ -660,6 +660,7 @@ export function renderDashboardHtml() {
     var pPrimary = manual.primary_slug || (raw.ai_verdict && raw.ai_verdict.primary_slug) || '';
     var pAddress = manual.address || '';
     var pPhone = manual.phone || '';
+    var pWebsite = manual.website || '';
     var pThumb = manual.thumbnail || '';
     var pRating = manual.rating != null ? manual.rating : '';
     var pReviews = manual.reviews != null ? manual.reviews : '';
@@ -694,6 +695,7 @@ export function renderDashboardHtml() {
       field('Type (Google business type)', 'type', pType, { placeholder: 'Coffee shop / Bank / Cinema…' }) +
       field('Address', 'address', pAddress, { full: true }) +
       field('Phone', 'phone', pPhone) +
+      field('Website', 'website', pWebsite, { placeholder: 'https://example.com' }) +
       field('Thumbnail URL', 'thumbnail', pThumb) +
       field('Rating (0–5)', 'rating', pRating) +
       field('Reviews count', 'reviews', pReviews) +
