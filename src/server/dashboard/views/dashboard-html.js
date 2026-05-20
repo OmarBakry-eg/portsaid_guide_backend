@@ -13,7 +13,8 @@ export function renderDashboardHtml() {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0a0e1a">
 <title>PortSaid Guide — Admin</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -47,32 +48,45 @@ export function renderDashboardHtml() {
   }
 
   /* ── Layout container + responsive sidebar ──────────────────── */
-  .container { max-width: 1280px; margin: 0 auto; padding: 24px 16px; }
-  .header {
-    display: flex; flex-direction: column; gap: 16px;
-    margin-bottom: 24px;
+  /* Container padding scales: 12px on iPhone-narrow (≤380px), 16px
+     on standard phones, 32px on desktop. The env(safe-area-*) shims
+     keep content clear of the iOS Dynamic Island / notch when the
+     dashboard is opened in mobile Safari with viewport-fit=cover. */
+  .container {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: max(16px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
   }
-  .header h1 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.5px; }
+  .header {
+    display: flex; flex-direction: column; gap: 12px;
+    margin-bottom: 20px;
+  }
+  .header h1 { margin: 0; font-size: 20px; font-weight: 800; letter-spacing: -0.4px; line-height: 1.15; }
   .header h1 .grad {
     background: linear-gradient(135deg, #ff9555, #ff6b9d);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
   }
-  .header .sub { color: rgba(255,255,255,0.5); font-size: 13px; margin-top: 4px; }
-  .layout { display: flex; flex-direction: column; gap: 24px; }
+  .header .sub { color: rgba(255,255,255,0.5); font-size: 12px; margin-top: 4px; }
+  .layout { display: flex; flex-direction: column; gap: 18px; }
   .sidebar {
     flex-shrink: 0;
     display: flex; flex-direction: row; gap: 4px;
     overflow-x: auto;
     padding: 6px;
+    -webkit-overflow-scrolling: touch; /* iOS momentum scroll */
   }
   .sidebar::-webkit-scrollbar { display: none; }
   .sidebar { -ms-overflow-style: none; scrollbar-width: none; }
   .main-content { flex: 1; min-width: 0; }
+  @media (min-width: 480px) {
+    .container { padding: 20px 16px; }
+    .header h1 { font-size: 22px; }
+  }
   @media (min-width: 880px) {
     .container { padding: 32px 32px; }
-    .header { flex-direction: row; align-items: center; justify-content: space-between; }
+    .header { flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
     .header h1 { font-size: 28px; }
-    .layout { flex-direction: row; }
+    .layout { flex-direction: row; gap: 24px; }
     .sidebar { flex-direction: column; width: 220px; position: sticky; top: 16px; }
   }
 
@@ -92,11 +106,15 @@ export function renderDashboardHtml() {
 
   /* ── Side nav items ─────────────────────────────────────────── */
   .nav-item {
-    display: flex; align-items: center; gap: 10px;
-    padding: 10px 14px; border-radius: 10px;
-    color: rgba(255,255,255,0.7); font-weight: 600; font-size: 14px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-radius: 10px;
+    color: rgba(255,255,255,0.7); font-weight: 600; font-size: 13px;
     cursor: pointer; transition: background 0.15s, color 0.15s;
     white-space: nowrap; border: 1px solid transparent;
+    touch-action: manipulation;
+  }
+  @media (min-width: 880px) {
+    .nav-item { padding: 10px 14px; font-size: 14px; gap: 10px; }
   }
   .nav-item:hover { background: rgba(255,255,255,0.06); color: white; }
   .nav-item.active {
@@ -106,7 +124,16 @@ export function renderDashboardHtml() {
   }
 
   /* ── Buttons ────────────────────────────────────────────────── */
-  .btn { padding: 8px 16px; border-radius: 10px; font-weight: 600; font-size: 13px; transition: background 0.15s, transform 0.15s, box-shadow 0.15s; }
+  /* min-height keeps buttons tappable on mobile (Apple HIG: 44 pt) */
+  .btn {
+    padding: 9px 14px;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: 13px;
+    min-height: 38px;
+    transition: background 0.15s, transform 0.15s, box-shadow 0.15s;
+    touch-action: manipulation; /* eliminate iOS 300ms tap delay */
+  }
   .btn-primary {
     background: linear-gradient(135deg, #ff9555, #ff6b9d);
     color: white; font-weight: 700;
@@ -125,7 +152,12 @@ export function renderDashboardHtml() {
   .btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
   /* ── Tabs (used inside views) ───────────────────────────────── */
-  .tab-row { display: flex; gap: 8px; padding: 8px; margin-bottom: 16px; overflow-x: auto; }
+  .tab-row {
+    display: flex; gap: 6px;
+    padding: 6px; margin-bottom: 14px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
   .tab-row::-webkit-scrollbar { display: none; }
   .tab-row { -ms-overflow-style: none; scrollbar-width: none; }
   .tab { white-space: nowrap; }
@@ -149,7 +181,10 @@ export function renderDashboardHtml() {
   .pill-ghost     { background: rgba(255,255,255,0.10); color: rgba(255,255,255,0.70); }
 
   /* ── Cards (list items) ─────────────────────────────────────── */
-  .card { padding: 20px; }
+  .card { padding: 16px; }
+  @media (min-width: 600px) {
+    .card { padding: 20px; }
+  }
   .card + .card { margin-top: 12px; }
   .card .head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
   .card .title { font-size: 16px; font-weight: 700; margin: 8px 0 0; }
@@ -163,16 +198,20 @@ export function renderDashboardHtml() {
   .note-block { margin-top: 8px; font-size: 12px; color: rgba(255,255,255,0.5); }
 
   /* ── Table ──────────────────────────────────────────────────── */
-  .tbl-wrap { overflow-x: auto; }
-  .tbl { width: 100%; }
+  .tbl-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tbl { width: 100%; min-width: 520px; /* keep columns readable; horizontal scroll on narrow screens */ }
   .tbl th {
-    padding: 12px; text-align: left;
+    padding: 10px 12px; text-align: left;
     font-size: 11px; color: rgba(255,255,255,0.5);
     text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700;
     border-bottom: 1px solid rgba(255,255,255,0.08);
+    white-space: nowrap;
   }
   .tbl td {
-    padding: 12px;
+    padding: 10px 12px;
     font-size: 13px;
     border-bottom: 1px solid rgba(255,255,255,0.05);
   }
@@ -183,7 +222,7 @@ export function renderDashboardHtml() {
 
   /* ── Filters row ────────────────────────────────────────────── */
   .filters {
-    padding: 16px; margin-bottom: 16px;
+    padding: 12px; margin-bottom: 14px;
     display: flex; flex-wrap: wrap; gap: 8px;
   }
   .filters input {
@@ -192,9 +231,17 @@ export function renderDashboardHtml() {
     border-radius: 8px;
     padding: 8px 12px;
     font-size: 13px;
-    min-width: 180px;
+    /* On mobile every input takes a full row; on desktop they line
+       up. min-width: 0 lets flex-basis: 100% actually shrink instead
+       of pushing the row past the viewport. */
+    flex: 1 1 100%;
+    min-width: 0;
   }
-  .filters .grow { flex: 1; }
+  @media (min-width: 600px) {
+    .filters { padding: 16px; }
+    .filters input { flex: 1 1 180px; }
+  }
+  .filters .grow { flex: 1 1 100%; }
   .filters .hint { width: 100%; font-size: 11px; color: rgba(255,255,255,0.4); margin-top: 4px; }
 
   /* ── Stats grid + cards ─────────────────────────────────────── */
@@ -206,16 +253,24 @@ export function renderDashboardHtml() {
   @media (min-width: 720px) {
     .stat-grid { grid-template-columns: repeat(4, 1fr); }
   }
-  .stat-card { padding: 18px 20px; }
+  .stat-card { padding: 14px 16px; }
+  @media (min-width: 600px) {
+    .stat-card { padding: 18px 20px; }
+  }
   .stat-label {
-    font-size: 11px; text-transform: uppercase;
+    font-size: 10.5px; text-transform: uppercase;
     letter-spacing: 0.06em; color: rgba(255,255,255,0.5);
+    line-height: 1.3;
   }
   .stat-num {
     margin-top: 8px;
-    font-size: 28px; font-weight: 800; line-height: 1;
+    font-size: 24px; font-weight: 800; line-height: 1;
     background: linear-gradient(135deg, #ff9555, #ff6b9d);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  @media (min-width: 600px) {
+    .stat-label { font-size: 11px; }
+    .stat-num { font-size: 28px; }
   }
   .stat-detail { padding: 20px; margin-top: 16px; }
   .stat-detail h3 { margin: 0 0 12px; font-size: 15px; font-weight: 700; }
@@ -298,6 +353,59 @@ export function renderDashboardHtml() {
   .edit-panel .status-msg.ok { color: #6cf09a; }
   .edit-panel .status-msg.err { color: #ff8a82; }
 
+  /* ── Send (admin notification) form ─────────────────────────── */
+  .send-form {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  @media (min-width: 720px) {
+    .send-form { grid-template-columns: 1fr 1fr; }
+    .send-form .full { grid-column: 1 / -1; }
+  }
+  .send-form label {
+    display: flex; flex-direction: column; gap: 4px;
+    font-size: 11px; color: rgba(255,255,255,0.5);
+    text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;
+  }
+  .send-form label .lbl { /* used for inline labels not wrapped in <label> */ }
+  .send-form input,
+  .send-form textarea {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-size: 13px;
+    color: white;
+    text-transform: none; letter-spacing: 0; font-weight: 400;
+    font-family: inherit;
+  }
+  .send-form textarea { resize: vertical; min-height: 88px; }
+  .send-form .row-check {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: rgba(255,255,255,0.85);
+    text-transform: none; letter-spacing: 0; font-weight: 600;
+  }
+  .send-form .user-list {
+    max-height: 240px; overflow-y: auto;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    margin-top: 8px;
+  }
+  .send-form .user-list-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; cursor: pointer;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    font-size: 12.5px;
+  }
+  .send-form .user-list-row:last-child { border-bottom: none; }
+  .send-form .user-list-row:hover { background: rgba(255,255,255,0.04); }
+  .send-form .user-list-row.checked { background: rgba(255,149,85,0.10); }
+  .send-form .user-list-row input[type="checkbox"] { margin: 0; }
+  .send-form .user-list-row .uname { font-weight: 600; }
+  .send-form .user-list-row .uemail { color: rgba(255,255,255,0.55); font-size: 11.5px; }
+  .send-form #send-user-picker[hidden] { display: none; }
+
   /* ── Empty / error states ───────────────────────────────────── */
   .empty {
     padding: 64px 24px; text-align: center;
@@ -340,6 +448,7 @@ export function renderDashboardHtml() {
       <div class="nav-item" data-view="users"><span>👤</span><span>Users</span></div>
       <div class="nav-item" data-view="reports"><span>🚩</span><span>Reports</span></div>
       <div class="nav-item" data-view="inquiries"><span>💬</span><span>Inquiries</span></div>
+      <div class="nav-item" data-view="send"><span>📣</span><span>Send</span></div>
       <div class="nav-item" data-view="stats"><span>📊</span><span>Stats</span></div>
     </aside>
 
@@ -401,6 +510,50 @@ export function renderDashboardHtml() {
           <button data-inq-status="all" class="tab btn btn-ghost">All</button>
         </div>
         <div id="inquiries-list"></div>
+      </section>
+
+      <!-- Send notification (admin → users) -->
+      <section data-view-section="send">
+        <div class="glass-strong" style="padding:18px;border-radius:16px;">
+          <h2 style="margin:0 0 4px;font-size:18px;font-weight:800;">Send a notification</h2>
+          <div style="font-size:12px;color:rgba(255,255,255,0.6);margin-bottom:14px;">
+            Picks land in the user's bell drawer in-app AND fire as push notifications to every device they're signed in on.
+          </div>
+
+          <div class="send-form">
+            <label class="full">
+              <div class="lbl">Subject</div>
+              <input id="send-subject" placeholder="A new feature is live!" maxlength="200">
+            </label>
+            <label class="full">
+              <div class="lbl">Body</div>
+              <textarea id="send-body" rows="4" maxlength="2000" placeholder="Tap to read more in PortSaid Guide."></textarea>
+            </label>
+            <label class="full">
+              <div class="lbl">Deep link to a place (optional)</div>
+              <input id="send-place-id" placeholder="place_id — tap on the push will open this place">
+            </label>
+
+            <div class="recipients-row full">
+              <div class="lbl" style="margin-bottom:6px;">Recipients</div>
+              <label class="row-check">
+                <input type="checkbox" id="send-all-users">
+                <span>Send to all users</span>
+              </label>
+              <div id="send-user-picker" style="margin-top:8px;">
+                <input id="send-user-filter" placeholder="Search users by name or email…">
+                <div id="send-user-list" class="user-list"></div>
+                <div id="send-user-count" class="hint" style="margin-top:6px;">0 users selected</div>
+              </div>
+            </div>
+
+            <div class="save-row full" style="margin-top:6px;">
+              <button id="send-btn" class="btn btn-primary">Send</button>
+              <button id="send-clear-btn" class="btn btn-ghost">Clear form</button>
+            </div>
+            <div id="send-status" class="status-msg full"></div>
+          </div>
+        </div>
       </section>
 
       <!-- Stats -->
@@ -478,6 +631,7 @@ export function renderDashboardHtml() {
     else if (view === 'users') loadUsers();
     else if (view === 'reports') loadReports();
     else if (view === 'inquiries') loadInquiries();
+    else if (view === 'send') loadSendView();
     else if (view === 'stats') loadStats();
   }
 
@@ -956,6 +1110,169 @@ export function renderDashboardHtml() {
       .catch(function(e) { list.innerHTML = '<div class="err">Error: ' + escapeHtml(e.message) + '</div>'; });
   }
 
+  // ── Send (admin → user notifications) ──
+  //
+  // Renders a form with subject + body + optional place_id deep link
+  // plus a multi-select user picker that's fetched lazily on first
+  // open. "Send to all users" hides the picker and dispatches to
+  // everyone in users/. Selected uids persist across re-renders of
+  // this view while the dashboard is open.
+  var sendUsers = [];           // [{ uid, display_name, email, photo_url }]
+  var sendSelectedUids = new Set();
+  var sendUsersLoaded = false;
+
+  function loadSendView() {
+    var statusEl = $('#send-status'); if (statusEl) { statusEl.textContent = ''; statusEl.className = 'status-msg full'; }
+    // Lazy-fetch user list — Users tab already has the data, but we
+    // can't assume the user opened it first. Cache once per session.
+    if (!sendUsersLoaded) {
+      sendUsersLoaded = true;
+      var listEl = $('#send-user-list');
+      if (listEl) listEl.innerHTML = '<div style="padding:10px;font-size:12px;color:rgba(255,255,255,0.5);">Loading users…</div>';
+      fetch('/omar-dash/api/users?limit=500', { credentials: 'same-origin' })
+        .then(function(r) { return r.json(); })
+        .then(function(b) {
+          if (!b.ok) throw new Error(b.error || 'failed');
+          sendUsers = b.items || [];
+          renderUserPicker();
+        })
+        .catch(function(e) {
+          if (listEl) listEl.innerHTML = '<div class="err">Couldn\\'t load users: ' + escapeHtml(e.message) + '</div>';
+          sendUsersLoaded = false; // allow retry on next view open
+        });
+    } else {
+      renderUserPicker();
+    }
+  }
+
+  function renderUserPicker() {
+    var listEl = $('#send-user-list');
+    var filter = ($('#send-user-filter').value || '').trim().toLowerCase();
+    var rows = sendUsers
+      .filter(function(u) {
+        if (!filter) return true;
+        return (u.display_name || '').toLowerCase().includes(filter) ||
+               (u.email || '').toLowerCase().includes(filter);
+      });
+    if (rows.length === 0) {
+      listEl.innerHTML = '<div style="padding:14px;font-size:12px;color:rgba(255,255,255,0.5);text-align:center;">No users match.</div>';
+    } else {
+      listEl.innerHTML = rows.map(function(u) {
+        var checked = sendSelectedUids.has(u.uid);
+        var avatar = u.photo_url
+          ? '<img src="' + escapeHtml(u.photo_url) + '" class="avatar" alt="">'
+          : '<span class="avatar-placeholder"></span>';
+        return '<div class="user-list-row' + (checked ? ' checked' : '') + '" data-uid="' + escapeHtml(u.uid) + '">' +
+          '<input type="checkbox"' + (checked ? ' checked' : '') + ' />' +
+          avatar +
+          '<div style="flex:1;min-width:0;">' +
+            '<div class="uname" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(u.display_name || '(no name)') + '</div>' +
+            '<div class="uemail" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(u.email || u.uid) + '</div>' +
+          '</div>' +
+          '</div>';
+      }).join('');
+      $$('.user-list-row', listEl).forEach(function(row) {
+        row.addEventListener('click', function(e) {
+          // Don't double-toggle if the checkbox was the direct target.
+          if (e.target.tagName === 'INPUT') return;
+          var uid = row.dataset.uid;
+          if (sendSelectedUids.has(uid)) sendSelectedUids.delete(uid);
+          else sendSelectedUids.add(uid);
+          updateSelectedCount();
+          renderUserPicker();
+        });
+        var cb = row.querySelector('input[type="checkbox"]');
+        if (cb) cb.addEventListener('change', function() {
+          var uid = row.dataset.uid;
+          if (cb.checked) sendSelectedUids.add(uid);
+          else sendSelectedUids.delete(uid);
+          updateSelectedCount();
+          row.classList.toggle('checked', cb.checked);
+        });
+      });
+    }
+    updateSelectedCount();
+  }
+
+  function updateSelectedCount() {
+    var n = sendSelectedUids.size;
+    var el = $('#send-user-count');
+    if (el) el.textContent = n === 1 ? '1 user selected' : (n + ' users selected');
+  }
+
+  function wireSendOnce() {
+    if (wireSendOnce.done) return; wireSendOnce.done = true;
+
+    var filterInput = $('#send-user-filter');
+    if (filterInput) filterInput.addEventListener('input', renderUserPicker);
+
+    var allBox = $('#send-all-users');
+    var picker = $('#send-user-picker');
+    if (allBox && picker) {
+      allBox.addEventListener('change', function() {
+        picker.hidden = allBox.checked;
+      });
+    }
+
+    var sendBtn = $('#send-btn');
+    if (sendBtn) sendBtn.addEventListener('click', function() {
+      var subject = ($('#send-subject').value || '').trim();
+      var body = ($('#send-body').value || '').trim();
+      var placeId = ($('#send-place-id').value || '').trim();
+      var statusEl = $('#send-status');
+      var setStatus = function(text, cls) {
+        if (!statusEl) return;
+        statusEl.textContent = text || '';
+        statusEl.className = 'status-msg full ' + (cls || '');
+      };
+      if (!subject || !body) { setStatus('Subject and body are required.', 'err'); return; }
+      var allChecked = $('#send-all-users').checked === true;
+      var uids = allChecked ? null : Array.from(sendSelectedUids);
+      if (!allChecked && uids.length === 0) {
+        setStatus('Pick at least one user (or check "Send to all users").', 'err');
+        return;
+      }
+      sendBtn.disabled = true;
+      var origLabel = sendBtn.textContent;
+      sendBtn.textContent = 'Sending…';
+      setStatus('Sending…');
+      var payload = { subject: subject, body: body };
+      if (placeId) payload.place_id = placeId;
+      if (allChecked) payload.all_users = true;
+      else payload.uids = uids;
+      fetch('/omar-dash/api/notifications/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        credentials: 'same-origin',
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (!d.ok) throw new Error(d.error || 'send failed');
+          setStatus('Sent to ' + d.sent + ' of ' + d.total + ' users' + (d.skipped ? ' (' + d.skipped + ' failed)' : '') + '.', 'ok');
+          // Don't auto-clear: the admin may want to tweak + send to another batch.
+        })
+        .catch(function(e) { setStatus('Send failed: ' + e.message, 'err'); })
+        .finally(function() {
+          sendBtn.disabled = false;
+          sendBtn.textContent = origLabel;
+        });
+    });
+
+    var clearBtn = $('#send-clear-btn');
+    if (clearBtn) clearBtn.addEventListener('click', function() {
+      $('#send-subject').value = '';
+      $('#send-body').value = '';
+      $('#send-place-id').value = '';
+      $('#send-all-users').checked = false;
+      $('#send-user-picker').hidden = false;
+      sendSelectedUids.clear();
+      $('#send-status').textContent = '';
+      $('#send-status').className = 'status-msg full';
+      if (sendUsersLoaded) renderUserPicker();
+    });
+  }
+
   // ── Stats ──
   function loadStats() {
     var grid = $('#stats-grid');
@@ -1021,6 +1338,7 @@ export function renderDashboardHtml() {
   setSubStatus('pending');
   setRepStatus('open');
   setInqStatus('open');
+  wireSendOnce();
   setView('submissions');
 </script>
 </body>

@@ -26,6 +26,7 @@
 //   GET  /omar-dash/api/users
 //   GET  /omar-dash/api/reports?status=
 //   POST /omar-dash/api/reports/:id/resolve
+//   POST /omar-dash/api/notifications/broadcast → admin-initiated push
 //   GET  /omar-dash/api/stats
 
 import {
@@ -44,6 +45,8 @@ import {
   resolveInquiry,
   getStats,
 } from './admin-queries.js';
+import { broadcastNotification } from './notifications.js';
+import { getFirestore } from '../../pipeline/firestore.js';
 import { renderDashboardHtml } from './views/dashboard-html.js';
 
 /// Admin credentials. Defaults match the product spec; env vars
@@ -267,6 +270,32 @@ export function mountDashboard(app) {
         response: req.body?.response,
       });
       res.json({ ok: true, ...out });
+    })
+  );
+
+  // Admin-initiated notification broadcast. Body:
+  //   {
+  //     uids?: string[],      // explicit recipients
+  //     all_users?: bool,     // OR send to everyone in users/
+  //     subject: string,      // visible title
+  //     body: string,         // visible body
+  //     place_id?: string,    // optional deep link target
+  //   }
+  // Either `uids` (non-empty) or `all_users: true` is required.
+  app.post(
+    '/omar-dash/api/notifications/broadcast',
+    basicAuthGate,
+    jsonHandler(async (req, res) => {
+      const body = req.body || {};
+      const db = await getFirestore();
+      const result = await broadcastNotification(db, {
+        uids: body.uids,
+        allUsers: body.all_users === true,
+        subject: body.subject,
+        body: body.body,
+        deepPlaceId: body.place_id,
+      });
+      res.json({ ok: true, ...result });
     })
   );
 

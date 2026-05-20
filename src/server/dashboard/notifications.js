@@ -151,6 +151,71 @@ async function sendFcmPush(db, uid, payload, notificationId) {
   if (deletions.length) await Promise.all(deletions);
 }
 
+/// Broadcast a notification to a list of users (or to ALL signed-in
+/// users when [allUsers] is true). Each user gets their own row at
+/// user_notifications/{uid}/items + their own FCM push.
+///
+/// Returns { sent, skipped, total } counters so the dashboard can
+/// show "Sent to 12 users" feedback.
+///
+/// Guard rails:
+///   - Subject + body trimmed and length-capped (200 / 2000 chars).
+///   - Per-batch cap of 500 uids (Firestore batch limit + reasonable
+///     ceiling for admin-driven broadcasts).
+///   - Each write is best-effort; failures don't block the next user.
+export async function broadcastNotification(db, {
+  uids,
+  allUsers,
+  subject,
+  body,
+  deepPlaceId,
+}) {
+  const cleanSubject = (subject || '').toString().trim().slice(0, 200);
+  const cleanBody = (body || '').toString().trim().slice(0, 2000);
+  if (!cleanSubject || !cleanBody) {
+    throw new Error('subject and body are required');
+  }
+  let targetUids = [];
+  if (allUsers === true) {
+    // Resolve "all users" by paging through `users/` — capped at 500
+    // to keep the batch reasonable. For a larger user base we'd
+    // partition + dispatch in chunks, but for this app's scale a
+    // single pass is fine.
+    const snap = await db.collection('users').limit(500).get();
+    targetUids = snap.docs.map((d) => d.id);
+  } else if (Array.isArray(uids)) {
+    targetUids = uids
+        .map((u) => (typeof u === 'string' ? u.trim() : ''))
+        .filter(Boolean)
+        .slice(0, 500);
+  }
+  if (targetUids.length === 0) {
+    throw new Error('no target users — pick at least one or enable "all users"');
+  }
+
+  const payload = {
+    kind: 'admin_broadcast',
+    title: cleanSubject,
+    body: cleanBody,
+  };
+  if (deepPlaceId && typeof deepPlaceId === 'string' && deepPlaceId.trim()) {
+    payload.place_id = deepPlaceId.trim();
+  }
+
+  let sent = 0;
+  let skipped = 0;
+  // Sequential is fine here — Firestore writes are I/O-bound but
+  // already cheap, and we don't want to flood Cloud Messaging with
+  // hundreds of parallel calls. With per-write FCM fan-out happening
+  // in the background, the wall clock for 500 users is well under
+  // the dashboard's network timeout.
+  for (const uid of targetUids) {
+    const id = await writeUserNotification(db, uid, payload);
+    if (id) sent++; else skipped++;
+  }
+  return { sent, skipped, total: targetUids.length };
+}
+
 /// Build a short headline for an admin-edit notification. Keeps the
 /// copy positive — the user just had someone touch their submission;
 /// the message shouldn't read like a complaint.
