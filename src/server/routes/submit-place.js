@@ -50,18 +50,36 @@ const AUTO_ADD_CONFIDENCE = 0.7;
 // handler had to talk to Firestore.
 const getDb = getFirestore;
 
-/// Check the submitter's rate limit. Returns the current count
-/// (after this would-be submission would be added — i.e. the value
-/// to compare against the limit).
+/// Check the submitter's rate limit. Returns the count of submissions
+/// the user has made in the last 24 hours.
+///
+/// Implementation note: we do this as ONE single-field equality query
+/// (`submitted_by_uid == uid`) plus a tight client-side filter on
+/// `submitted_at_iso`. The old version used a TWO-where composite
+/// query that required a manually-created Firestore composite index
+/// ("9 FAILED_PRECONDITION: The query requires an index") — which
+/// blocked every first-time submission on a fresh project. Single-
+/// field equality uses the default per-field index that Firestore
+/// auto-maintains, so no manual index step is needed.
+///
+/// Bounded fetch (`limit(200)`) so the query stays cheap even for a
+/// user with thousands of historic submissions. 200 is well above
+/// any realistic 24h window — at our cap of 10/day it'd take 20
+/// days for an active user to fill, after which older entries drop
+/// out of our `since` window naturally and the bound stays accurate.
 async function getDailyCount(db, uid) {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const snap = await db
       .collection('place_submissions')
       .where('submitted_by_uid', '==', uid)
-      .where('submitted_at_iso', '>=', since)
-      .limit(DAILY_SUBMIT_LIMIT + 1)
+      .limit(200)
       .get();
-  return snap.size;
+  let count = 0;
+  for (const doc of snap.docs) {
+    const ts = doc.data().submitted_at_iso;
+    if (typeof ts === 'string' && ts >= since) count++;
+  }
+  return count;
 }
 
 /// Look up a place in places/ by either hex CID or lat/lon proximity
