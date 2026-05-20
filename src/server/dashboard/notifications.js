@@ -33,6 +33,9 @@
 
 /// Write a notification for [uid]. Returns the new doc id, or null on
 /// failure. NEVER throws — wrap callers don't need try/catch.
+///
+/// Side effect: also fires an FCM push to every registered token for
+/// the user (best-effort, runs in the background without awaiting).
 export async function writeUserNotification(db, uid, payload) {
   if (!db || !uid || !payload || typeof payload !== 'object') return null;
   try {
@@ -48,6 +51,10 @@ export async function writeUserNotification(db, uid, payload) {
       created_at: now,
       created_at_iso: now.toISOString(),
     });
+    // Fan out to FCM tokens without awaiting — the in-app stream is
+    // the source of truth, push is a convenience.
+    sendFcmPush(db, uid, payload, ref.id).catch((e) =>
+      console.warn(`[notifications] fcm fan-out failed: ${e.message}`));
     return ref.id;
   } catch (e) {
     console.warn(
@@ -55,6 +62,93 @@ export async function writeUserNotification(db, uid, payload) {
     );
     return null;
   }
+}
+
+/// Send a Cloud Messaging push to every FCM token registered under
+/// `users/{uid}/fcm_tokens/{token}`. The mobile registers tokens
+/// there on sign-in; tokens that 404/401 (uninstalled apps,
+/// reset devices) get removed from Firestore so we don't fan out
+/// to dead targets forever.
+async function sendFcmPush(db, uid, payload, notificationId) {
+  // Lazy-import so non-FCM code paths don't pay the cost.
+  const admin = await import('firebase-admin').catch(() => null);
+  if (!admin || !admin.default || !admin.default.messaging) {
+    return; // firebase-admin missing — nothing to do
+  }
+  const tokensSnap = await db
+      .collection('users')
+      .doc(uid)
+      .collection('fcm_tokens')
+      .limit(20) // sane cap; one user with 20+ devices is unrealistic
+      .get();
+  if (tokensSnap.empty) return;
+  const tokens = tokensSnap.docs.map((d) => d.id);
+
+  // Data payload mirrors the Firestore doc fields the mobile needs to
+  // build a deep link on tap (place_id / submission_id / kind). Keep
+  // these short — FCM data caps at 4 KB.
+  const data = {
+    notification_id: notificationId || '',
+    kind: String(payload.kind || ''),
+    place_id: String(payload.place_id || ''),
+    submission_id: String(payload.submission_id || ''),
+  };
+
+  const message = {
+    tokens,
+    notification: {
+      title: String(payload.title || 'PortSaid Guide').slice(0, 200),
+      body: String(payload.body || '').slice(0, 500),
+    },
+    data,
+    apns: {
+      payload: {
+        aps: {
+          sound: 'default',
+          badge: 1,
+        },
+      },
+    },
+    android: {
+      priority: 'high',
+      notification: {
+        sound: 'default',
+        channelId: 'portsaid_guide_default',
+      },
+    },
+  };
+  let response;
+  try {
+    response = await admin.default.messaging().sendEachForMulticast(message);
+  } catch (e) {
+    console.warn(`[notifications] sendMulticast failed: ${e.message}`);
+    return;
+  }
+
+  // Prune tokens FCM rejected as invalid (typical 404 InvalidRegistration
+  // = app was uninstalled). Keeps the per-user list lean over time.
+  const deletions = [];
+  response.responses.forEach((r, idx) => {
+    if (!r.success && r.error) {
+      const code = r.error.code || '';
+      if (
+        code === 'messaging/registration-token-not-registered' ||
+        code === 'messaging/invalid-registration-token' ||
+        code === 'messaging/invalid-argument'
+      ) {
+        deletions.push(
+          db
+              .collection('users')
+              .doc(uid)
+              .collection('fcm_tokens')
+              .doc(tokens[idx])
+              .delete()
+              .catch(() => {})
+        );
+      }
+    }
+  });
+  if (deletions.length) await Promise.all(deletions);
 }
 
 /// Build a short headline for an admin-edit notification. Keeps the
