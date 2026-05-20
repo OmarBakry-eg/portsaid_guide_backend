@@ -1,0 +1,52 @@
+{
+  "$schema": "https://firebase.google.com/docs/firestore/reference/rest/v1/projects.databases.indexes",
+  "indexes": [
+    {
+      "_comment_": "Mobile profile page — submissions tab. Filter by submitter + status, ordered newest-first. Used by lib/features/profile/.../profile_page.dart's _SubmissionsTab.",
+      "collectionGroup": "place_submissions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "submitted_by_uid", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "submitted_at", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "_comment_": "Mobile 'Added by you' chip — UserSubmissionsCubit listens to a user's approved submissions to populate the place-id set. Filter by submitter + status (no orderBy, but Firestore still needs the composite for two equality filters when status comparison is also indexed).",
+      "collectionGroup": "place_submissions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "submitted_by_uid", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "_comment_": "Admin dashboard /omar-dash listSubmissions — filter by status, ordered newest-first. Used by src/server/dashboard/admin-actions.js#listSubmissions.",
+      "collectionGroup": "place_submissions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "submitted_at", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "_comment_": "Admin dashboard /omar-dash listReports — filter by status, ordered newest-first. Used by src/server/dashboard/admin-queries.js#listReports.",
+      "collectionGroup": "place_reports",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "created_at", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "_comment_": "Admin dashboard listPlaces — filter by source_categories (array-contains) + order by title. Used by src/server/dashboard/admin-queries.js#listPlaces.",
+      "collectionGroup": "places",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "source_categories", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "title", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
