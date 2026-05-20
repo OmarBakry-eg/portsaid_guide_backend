@@ -174,31 +174,48 @@ export function makeSubmitPlaceHandler() {
   };
 }
 
+/// Per-step debug logger. Use [submit-place uid=… step=…] tags so the
+/// Render log viewer's text filter can isolate one submission's whole
+/// trace easily.
+function log(req, step, info) {
+  const uid = (req.user?.uid || '?').slice(0, 8);
+  const url = (req.body?.url || '').slice(0, 80);
+  const extra = info ? ' | ' + JSON.stringify(info).slice(0, 280) : '';
+  console.log(`[submit-place uid=${uid}] ${step} | url=${url}${extra}`);
+}
+
 async function submitPlace(req, res) {
     const uid = req.user?.uid;
     if (!uid) {
+      console.log('[submit-place] reject: no uid');
       return res.status(401).json({ error: 'unauthenticated' });
     }
     const url = (req.body?.url || '').toString().trim();
     if (!url) {
+      log(req, 'reject: missing url');
       return res.status(400).json({
         error: 'missing_url',
         message: 'Pass `url` in the request body.',
       });
     }
+    log(req, 'start');
     const db = await getDb();
+    log(req, 'db ready');
 
     // Rate-limit before doing any expensive work.
     const dailyCount = await getDailyCount(db, uid);
+    log(req, 'rate-limit check', { dailyCount, limit: DAILY_SUBMIT_LIMIT });
     if (dailyCount >= DAILY_SUBMIT_LIMIT) {
       return res.status(429).json({
         outcome: 'rate_limited',
+        reason: `You've submitted ${dailyCount} places in the last 24 hours. Try again tomorrow.`,
         message: `You've submitted ${dailyCount} places in the last 24 hours. Try again tomorrow.`,
       });
     }
 
     // 1. Resolve URL → hex pair / coords / rejection.
     const parsed = await resolveUrl(url);
+    log(req, 'resolveUrl done', { rejected: !!parsed.rejection, kind: parsed.kind, hex: parsed.place_hex_pair, lat: parsed.lat, lon: parsed.lon, name_hint: parsed.name_hint });
     if (parsed.rejection) {
       const submissionId = await recordSubmission(db, {
         submitted_url: url,
@@ -220,6 +237,10 @@ async function submitPlace(req, res) {
       hexPair: parsed.place_hex_pair,
       lat: parsed.lat,
       lon: parsed.lon,
+    });
+    log(req, 'duplicate-check done', {
+      found: !!existing,
+      existing_id: existing?.id,
     });
     if (existing) {
       const submissionId = await recordSubmission(db, {
@@ -260,25 +281,30 @@ async function submitPlace(req, res) {
       });
     }
     let scrape;
+    let scrapeError;
     try {
       // Scrape against the place's coordinates. The name_hint (or a
       // generic query) anchors the search; the lat/lon constrains it.
-      // We pass the parsed name when we have it; otherwise fall back
-      // to a generic establishment query.
       const ll = `@${parsed.lat},${parsed.lon},17z`;
       const q = parsed.name_hint || 'place';
+      log(req, 'scrape start', { q, ll });
       scrape = await scrapePlaceDetails({
         place_id: parsed.place_hex_pair || undefined,
         q,
         ll,
-      }).catch(async () => {
-        // Some scrapers don't accept arbitrary place_id input; fall
-        // back to coordinate-based search-then-pick-first.
+      }).catch(async (e) => {
+        scrapeError = e;
         return null;
       });
     } catch (e) {
+      scrapeError = e;
       scrape = null;
     }
+    log(req, 'scrape done', {
+      got_place_id: !!(scrape && scrape.place_id),
+      title: scrape?.title,
+      error: scrapeError?.message,
+    });
     if (!scrape || !scrape.place_id) {
       const submissionId = await recordSubmission(db, {
         submitted_url: url,
@@ -296,7 +322,13 @@ async function submitPlace(req, res) {
     }
 
     // 4. Trust filter — must be inside Port Said + meet quality bar.
-    if (!isAccepted(scrape)) {
+    const accepted = isAccepted(scrape);
+    log(req, 'isAccepted', {
+      accepted,
+      lat: scrape.gps_coordinates?.latitude,
+      lon: scrape.gps_coordinates?.longitude,
+    });
+    if (!accepted) {
       const submissionId = await recordSubmission(db, {
         submitted_url: url,
         submitted_by_uid: uid,
@@ -316,11 +348,18 @@ async function submitPlace(req, res) {
     }
 
     // 5. Classify with the strict pipeline.
+    log(req, 'classify start');
     const cls = await classify(scrape, null);
     const confidence = cls?.classification?.confidence ?? 0;
     const primary = cls?.primary_slug ?? 'other';
     const autoAddOk =
         confidence >= AUTO_ADD_CONFIDENCE && primary !== 'other';
+    log(req, 'classify done', {
+      primary,
+      confidence,
+      method: cls?.classification?.method,
+      autoAddOk,
+    });
 
     if (!autoAddOk) {
       const submissionId = await recordSubmission(db, {
