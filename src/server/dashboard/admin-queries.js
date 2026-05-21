@@ -3,11 +3,25 @@
 // clean and the imports small per file.
 
 import { getFirestore } from '../../pipeline/firestore.js';
+import { getStore } from './live-store.js';
 
 // Shared Firestore client. pipeline/firestore.js owns the
 // settings({ ignoreUndefinedProperties: true }) call; calling it
 // twice in a process throws "Firestore has already been initialized".
 const getDb = getFirestore;
+
+// Helper used by the list endpoints — converts Firestore Timestamp
+// values stored in the in-memory store back to ISO strings so the
+// dashboard JSON serialiser doesn't choke. The streaming listener
+// stores doc.data() verbatim (which still contains Timestamp
+// objects); we don't want to walk every doc on every snapshot to
+// normalise eagerly, so we do it on the read side per-row.
+function tsIso(v) {
+  if (v == null) return null;
+  if (typeof v === 'string') return v;
+  if (typeof v?.toDate === 'function') return v.toDate().toISOString();
+  return null;
+}
 
 /// Server-side cache of the slim "place row" projection the dashboard
 /// table needs. Without this, every dashboard search had to pull the
@@ -135,108 +149,82 @@ export async function listPlaces({
 /// List users by sign-up time (newest first). Includes a quick
 /// submission count via a secondary query.
 export async function listUsers({ limit = 100 }) {
-  const db = await getDb();
-  const snap = await db
-      .collection('users')
-      .orderBy('created_at', 'desc')
-      .limit(limit)
-      .get();
-  // Counts via parallel aggregation reads. Each is cheap (server-
-  // side count, ~1 read regardless of result size).
-  const items = [];
-  for (const doc of snap.docs) {
-    const u = doc.data();
-    items.push({
-      uid: doc.id,
-      email: u.email,
-      display_name: u.display_name,
-      photo_url: u.photo_url,
-      created_at: u.created_at?.toDate?.()?.toISOString?.() || null,
-      last_login_at: u.last_login_at?.toDate?.()?.toISOString?.() || null,
-    });
+  // Zero Firestore reads: served from the in-memory streaming store
+  // for `users/` + a single pass over the in-memory submissions
+  // store to compute submission_count per user. Previously this
+  // endpoint was a textbook N+1 (one read for the user list + one
+  // count() aggregation per user) — for limit=200 that was ~400 reads
+  // per click on the Users tab.
+  const usersStore = await getStore('users');
+  const subsStore = await getStore('place_submissions');
+
+  // Tally submission counts by uid in one O(n) sweep.
+  const countsByUid = new Map();
+  for (const subData of subsStore.data.values()) {
+    const uid = subData.submitted_by_uid;
+    if (!uid) continue;
+    countsByUid.set(uid, (countsByUid.get(uid) || 0) + 1);
   }
-  // Attach submission counts in parallel.
-  const counts = await Promise.all(
-    items.map((u) =>
-      db
-          .collection('place_submissions')
-          .where('submitted_by_uid', '==', u.uid)
-          .count()
-          .get()
-          .then((c) => c.data().count)
-          .catch(() => 0)
-    )
-  );
-  for (let i = 0; i < items.length; i++) items[i].submission_count = counts[i];
-  return items;
+
+  // The streaming store is already ordered by created_at desc (the
+  // listener subscribes with that orderBy), so slicing the front
+  // gives us the newest N.
+  const users = usersStore.all().slice(0, limit);
+  return users.map((u) => ({
+    uid: u.id,
+    email: u.email,
+    display_name: u.display_name,
+    photo_url: u.photo_url,
+    created_at: tsIso(u.created_at),
+    last_login_at: tsIso(u.last_login_at),
+    submission_count: countsByUid.get(u.id) || 0,
+  }));
 }
 
 /// List place reports. Optional status filter (default open).
+/// Zero Firestore reads — served from the in-memory streaming store.
 export async function listReports({ status = 'open', limit = 100 }) {
-  const db = await getDb();
-  let q = db
-      .collection('place_reports')
-      .orderBy('created_at', 'desc')
-      .limit(limit);
-  if (status && status !== 'all') {
-    q = db
-        .collection('place_reports')
-        .where('status', '==', status)
-        .orderBy('created_at', 'desc')
-        .limit(limit);
-  }
-  const snap = await q.get();
-  return snap.docs.map((d) => {
-    const r = d.data();
-    return {
-      id: d.id,
-      place_id: r.place_id,
-      reported_by_uid: r.reported_by_uid,
-      reported_by_email: r.reported_by_email,
-      reason: r.reason,
-      note: r.note,
-      status: r.status,
-      created_at: r.created_at_iso ||
-          (r.created_at?.toDate?.()?.toISOString?.() || null),
-    };
-  });
+  const store = await getStore('place_reports');
+  const all = store.all();
+  const filtered = (status && status !== 'all')
+      ? all.filter((r) => r.status === status)
+      : all;
+  return filtered.slice(0, limit).map((r) => ({
+    id: r.id,
+    place_id: r.place_id,
+    reported_by_uid: r.reported_by_uid,
+    reported_by_email: r.reported_by_email,
+    reason: r.reason,
+    note: r.note,
+    status: r.status,
+    created_at: r.created_at_iso || tsIso(r.created_at),
+  }));
 }
 
 /// List user inquiries. Each inquiry is a free-text question/concern
 /// the user sent from the mobile app about one of their submitted /
 /// approved / rejected places. Newest first.
+/// Zero Firestore reads — served from the in-memory streaming store.
 export async function listInquiries({ status = 'open', limit = 100 }) {
-  const db = await getDb();
-  let q = db
-      .collection('place_inquiries')
-      .orderBy('created_at', 'desc')
-      .limit(limit);
-  if (status && status !== 'all') {
-    q = db
-        .collection('place_inquiries')
-        .where('status', '==', status)
-        .orderBy('created_at', 'desc')
-        .limit(limit);
-  }
-  const snap = await q.get();
-  return snap.docs.map((d) => {
-    const r = d.data();
-    return {
-      id: d.id,
-      user_uid: r.user_uid,
-      user_email: r.user_email,
-      user_name: r.user_name,
-      place_id: r.place_id,
-      submission_id: r.submission_id,
-      subject: r.subject,
-      body: r.body,
-      status: r.status,
-      created_at: r.created_at_iso ||
-          (r.created_at?.toDate?.()?.toISOString?.() || null),
-      resolved_at: r.resolved_at?.toDate?.()?.toISOString?.() || null,
-      admin_response: r.admin_response || null,
-    };
-  });
+  const store = await getStore('place_inquiries');
+  const all = store.all();
+  const filtered = (status && status !== 'all')
+      ? all.filter((r) => r.status === status)
+      : all;
+  return filtered.slice(0, limit).map((r) => ({
+    id: r.id,
+    user_uid: r.user_uid,
+    user_email: r.user_email,
+    user_name: r.user_name,
+    place_id: r.place_id,
+    submission_id: r.submission_id,
+    subject: r.subject,
+    body: r.body,
+    status: r.status,
+    created_at: r.created_at_iso || tsIso(r.created_at),
+    resolved_at: tsIso(r.resolved_at),
+    admin_response: r.admin_response || null,
+  }));
 }
 
 /// Mark an inquiry as resolved. Optional `response` is stored so the
@@ -266,83 +254,60 @@ export async function resolveReport(id) {
   return { id };
 }
 
-/// High-level counts for the Stats view. Each `.count()` is one
-/// read regardless of result size, so this is cheap (~10 reads).
+/// High-level counts for the Stats view.
+///
+/// Cost model: every count except `places` is derived from the in-
+/// memory streaming store — ZERO Firestore reads. The places count
+/// reads from the same 5-min TTL cache the dashboard's All Places
+/// table uses (`listPlaces`-backing rows), so if the admin has
+/// browsed places at all in the last 5 min the count is also free.
+/// First Stats fetch after a server cold-start costs at most ~4,400
+/// reads (the places-table cache fill) + 0 for everything else.
+///
+/// Previously: ~10 .count() aggregations per request = ~10 reads per
+/// Stats tab open. Mathematically cheap, but tab-flipping by an
+/// admin during a debug session added up — and the listener-derived
+/// numbers update in real time while the old approach showed stale
+/// counts for the duration of any debounced refresh.
 export async function getStats() {
-  const db = await getDb();
-  const [
-    placesCount,
-    usersCount,
-    submissionsPending,
-    submissionsApproved,
-    submissionsRejected,
-    submissionsDuplicate,
-    reportsOpen,
-    reportsResolved,
-    inquiriesOpen,
-    inquiriesResolved,
-  ] = await Promise.all([
-    db.collection('places').count().get(),
-    db.collection('users').count().get(),
-    db
-        .collection('place_submissions')
-        .where('status', '==', 'pending')
-        .count()
-        .get(),
-    db
-        .collection('place_submissions')
-        .where('status', '==', 'approved')
-        .count()
-        .get(),
-    db
-        .collection('place_submissions')
-        .where('status', '==', 'rejected')
-        .count()
-        .get(),
-    db
-        .collection('place_submissions')
-        .where('status', '==', 'duplicate')
-        .count()
-        .get(),
-    db
-        .collection('place_reports')
-        .where('status', '==', 'open')
-        .count()
-        .get(),
-    db
-        .collection('place_reports')
-        .where('status', '==', 'resolved')
-        .count()
-        .get(),
-    db
-        .collection('place_inquiries')
-        .where('status', '==', 'open')
-        .count()
-        .get()
-        .catch(() => ({ data: () => ({ count: 0 }) })),
-    db
-        .collection('place_inquiries')
-        .where('status', '==', 'resolved')
-        .count()
-        .get()
-        .catch(() => ({ data: () => ({ count: 0 }) })),
-  ]);
+  const subs = await getStore('place_submissions');
+  const reports = await getStore('place_reports');
+  const inquiries = await getStore('place_inquiries');
+  const users = await getStore('users');
+
+  // For the `places` count we reuse the listPlaces in-memory cache.
+  // If it's not warm yet we fall through to a single .count()
+  // aggregation (1 read). On a busy dashboard this happens at most
+  // once per 5 min.
+  let placesCount = 0;
+  if (_placesCache && Date.now() - _placesCacheAt < PLACES_CACHE_TTL_MS) {
+    placesCount = _placesCache.length;
+  } else {
+    try {
+      const db = await getDb();
+      const c = await db.collection('places').count().get();
+      placesCount = c.data().count;
+    } catch (_) {
+      placesCount = 0;
+    }
+  }
+
   return {
-    places: placesCount.data().count,
-    users: usersCount.data().count,
+    places: placesCount,
+    users: users.size(),
     submissions: {
-      pending: submissionsPending.data().count,
-      approved: submissionsApproved.data().count,
-      rejected: submissionsRejected.data().count,
-      duplicate: submissionsDuplicate.data().count,
+      pending: subs.countWhere('status', 'pending'),
+      approved: subs.countWhere('status', 'approved'),
+      rejected: subs.countWhere('status', 'rejected'),
+      duplicate: subs.countWhere('status', 'duplicate'),
     },
     reports: {
-      open: reportsOpen.data().count,
-      resolved: reportsResolved.data().count,
+      open: reports.countWhere('status', 'open'),
+      resolved: reports.countWhere('status', 'resolved'),
     },
     inquiries: {
-      open: inquiriesOpen.data().count,
-      resolved: inquiriesResolved.data().count,
+      open: inquiries.countWhere('status', 'open'),
+      resolved: inquiries.countWhere('status', 'resolved'),
     },
   };
 }

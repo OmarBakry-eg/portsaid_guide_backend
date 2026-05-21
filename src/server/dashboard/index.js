@@ -56,6 +56,7 @@ import {
   updatePlace,
   deletePlace,
 } from './admin-places.js';
+import { bootLiveStores, liveStoreHealth } from './live-store.js';
 import { renderDashboardHtml } from './views/dashboard-html.js';
 
 /// Admin credentials. Defaults match the product spec; env vars
@@ -124,6 +125,18 @@ function jsonHandler(fn) {
 /// Mount the dashboard on the supplied Express app. Call once at
 /// server start (after `express.json()` is wired).
 export function mountDashboard(app) {
+  // Boot the streaming cache for hot collections (submissions,
+  // reports, inquiries, users). Opens a single Firestore snapshot
+  // listener per collection — the initial snapshot pays one read
+  // per doc, and every dashboard request afterwards reads from RAM
+  // for the rest of the process lifetime.
+  //
+  // Non-blocking: if the listeners haven't fully warmed by the time
+  // the first request arrives, the endpoint awaits readiness
+  // internally (live-store.js#subscribe returns a ready Promise).
+  bootLiveStores().catch((e) =>
+      console.warn('[live-store] boot failed:', e.message));
+
   // ── Unprotected health probe ──
   // No basic-auth. Confirms the module loaded + all sibling imports
   // resolved. If /omar-dash 500s but this returns 200, the issue
@@ -136,6 +149,10 @@ export function mountDashboard(app) {
       admin_email_set: !!process.env.OMAR_DASH_USER,
       admin_pass_set: !!process.env.OMAR_DASH_PASS,
       firestore_project: process.env.FIRESTORE_PROJECT || null,
+      // Live-stream health: size of each in-memory store, last
+      // received timestamp, last error. Useful for triaging when the
+      // dashboard shows stale numbers.
+      live_stores: liveStoreHealth(),
       ts: new Date().toISOString(),
     });
   });

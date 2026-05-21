@@ -11,6 +11,7 @@ import { enrichWithScores } from '../../parsers/scoring.js';
 import { mainCategoryForSub } from '../../catalogue/main-of.js';
 import { hotInsertPlaceIntoCatalogue } from '../../catalogue/hot-insert.js';
 import { invalidatePlacesCache } from './admin-queries.js';
+import { getStore } from './live-store.js';
 import {
   writeUserNotification,
   formatEditHeadline,
@@ -44,39 +45,37 @@ import { getFirestore } from '../../pipeline/firestore.js';
 const getDb = getFirestore;
 
 /// List submissions for a given status, newest-first.
+///
+/// Zero Firestore reads — served from the in-memory streaming store.
+/// Was previously a `where(status).orderBy.limit(N)` per request,
+/// costing ~N reads each tab open. Now the listener delivers the
+/// initial snapshot once at boot and 1 read per change forever after,
+/// regardless of how many times the admin clicks tabs.
 export async function listSubmissions({ status, limit = 100 }) {
-  const db = await getDb();
-  let q = db
-      .collection('place_submissions')
-      .orderBy('submitted_at', 'desc')
-      .limit(limit);
-  if (status && status !== 'all') {
-    q = db
-        .collection('place_submissions')
-        .where('status', '==', status)
-        .orderBy('submitted_at', 'desc')
-        .limit(limit);
-  }
-  const snap = await q.get();
-  return snap.docs.map((d) => {
-    const data = d.data();
-    return {
-      id: d.id,
-      submitted_url: data.submitted_url,
-      submitted_by_uid: data.submitted_by_uid,
-      extracted_place_id: data.extracted_place_id || null,
-      extracted_title: data.extracted_title || null,
-      status: data.status,
-      ai_verdict: data.ai_verdict || null,
-      admin_note: data.admin_note || null,
-      duplicate_of: data.duplicate_of || null,
-      submitted_at: data.submitted_at_iso || (data.submitted_at?.toDate
-          ? data.submitted_at.toDate().toISOString()
-          : null),
-      resolved_at: data.resolved_at?.toDate?.()?.toISOString?.() || null,
-      resolved_by: data.resolved_by || null,
-    };
-  });
+  const store = await getStore('place_submissions');
+  // The listener subscribes with orderBy submitted_at desc, so
+  // store.all() is already newest-first.
+  const all = store.all();
+  const filtered = (status && status !== 'all')
+      ? all.filter((d) => d.status === status)
+      : all;
+  return filtered.slice(0, limit).map((data) => ({
+    id: data.id,
+    submitted_url: data.submitted_url,
+    submitted_by_uid: data.submitted_by_uid,
+    extracted_place_id: data.extracted_place_id || null,
+    extracted_title: data.extracted_title || null,
+    status: data.status,
+    ai_verdict: data.ai_verdict || null,
+    admin_note: data.admin_note || null,
+    duplicate_of: data.duplicate_of || null,
+    submitted_at: data.submitted_at_iso ||
+        (typeof data.submitted_at?.toDate === 'function'
+            ? data.submitted_at.toDate().toISOString() : null),
+    resolved_at: typeof data.resolved_at?.toDate === 'function'
+        ? data.resolved_at.toDate().toISOString() : null,
+    resolved_by: data.resolved_by || null,
+  }));
 }
 
 /// Return the full raw submission doc for the editor panel. Includes
