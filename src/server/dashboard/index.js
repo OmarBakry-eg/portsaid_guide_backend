@@ -23,6 +23,9 @@
 //   POST /omar-dash/api/submissions/:id/approve
 //   POST /omar-dash/api/submissions/:id/reject
 //   GET  /omar-dash/api/places?main=&sub=&search=
+//   POST /omar-dash/api/places              → admin creates a place from scratch
+//   PATCH /omar-dash/api/places/:placeId    → admin edits any place
+//   DELETE /omar-dash/api/places/:placeId   → admin removes a place
 //   GET  /omar-dash/api/users
 //   GET  /omar-dash/api/reports?status=
 //   POST /omar-dash/api/reports/:id/resolve
@@ -48,6 +51,11 @@ import {
 import { broadcastNotification } from './notifications.js';
 import { getFirestore } from '../../pipeline/firestore.js';
 import { reconcileCatalogue } from '../../catalogue/reconcile.js';
+import {
+  createPlace,
+  updatePlace,
+  deletePlace,
+} from './admin-places.js';
 import { renderDashboardHtml } from './views/dashboard-html.js';
 
 /// Admin credentials. Defaults match the product spec; env vars
@@ -216,6 +224,37 @@ export function mountDashboard(app) {
         limit: Math.min(parseInt(req.query.limit || '100', 10), 500),
       });
       res.json({ ok: true, count: items.length, items });
+    })
+  );
+
+  // ── Admin CRUD on places ──
+  // Required fields on create: title, lat, lon, primary_slug.
+  // Updates merge into the existing doc + recompute scoring.
+  // Delete drops the doc AND removes from every catalogue_bucket.
+  app.post(
+    '/omar-dash/api/places',
+    basicAuthGate,
+    jsonHandler(async (req, res) => {
+      const out = await createPlace(req.body || {});
+      res.json({ ok: true, ...out });
+    })
+  );
+
+  app.patch(
+    '/omar-dash/api/places/:placeId',
+    basicAuthGate,
+    jsonHandler(async (req, res) => {
+      const out = await updatePlace(req.params.placeId, req.body || {});
+      res.json({ ok: true, ...out });
+    })
+  );
+
+  app.delete(
+    '/omar-dash/api/places/:placeId',
+    basicAuthGate,
+    jsonHandler(async (req, res) => {
+      const out = await deletePlace(req.params.placeId);
+      res.json({ ok: true, ...out });
     })
   );
 

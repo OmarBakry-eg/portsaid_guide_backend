@@ -406,6 +406,40 @@ export function renderDashboardHtml() {
   .send-form .user-list-row .uemail { color: rgba(255,255,255,0.55); font-size: 11.5px; }
   .send-form #send-user-picker[hidden] { display: none; }
 
+  /* ── Modal (place editor) ───────────────────────────────────── */
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(5,8,18,0.75);
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    z-index: 9000;
+    display: flex; align-items: center; justify-content: center;
+    padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+             max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  }
+  .modal-overlay[hidden] { display: none; }
+  .modal-card {
+    width: 100%; max-width: 680px;
+    max-height: 90vh; overflow-y: auto;
+    padding: 20px;
+    border-radius: 18px;
+  }
+  .modal-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; margin-bottom: 14px;
+  }
+  .modal-head h3 { margin: 0; font-size: 18px; font-weight: 800; }
+  .modal-head .btn { padding: 6px 10px; min-height: 0; }
+
+  /* ── Row action buttons (Edit / Delete in tables) ───────────── */
+  .row-actions {
+    display: inline-flex; gap: 6px;
+    justify-content: flex-end;
+  }
+  .row-actions .btn {
+    padding: 4px 9px; font-size: 11.5px; min-height: 0;
+    border-radius: 7px;
+  }
+
   /* ── Toasts ─────────────────────────────────────────────────── */
   /* Floating non-blocking notifications. Used for API errors that
      used to replace whole sections (e.g. quota exhaustion on stats).
@@ -516,15 +550,18 @@ export function renderDashboardHtml() {
       <!-- Places -->
       <section data-view-section="places">
         <div class="filters glass-strong">
-          <input id="places-search" placeholder="Search title…" class="grow">
+          <input id="places-search" placeholder="Search title, type, slug, place_id…" class="grow">
           <input id="places-main" placeholder="main slug (food, shopping…)">
           <input id="places-sub" placeholder="sub slug (coffee, bank…)">
           <button id="places-search-btn" class="btn btn-primary">Search</button>
-          <div class="hint">'main' surfaces all sub-slugs of that main; 'sub' is exact match.</div>
+          <button id="places-new-btn" class="btn btn-ghost" style="display:inline-flex;align-items:center;gap:6px;">
+            <span style="font-size:16px;line-height:1;">+</span> Add place
+          </button>
+          <div class="hint">'main' surfaces all sub-slugs of that main; 'sub' is exact match. Search hits title, type, primary slug, and place_id.</div>
         </div>
         <div class="glass-strong tbl-wrap">
           <table class="tbl" id="places-table">
-            <thead><tr><th>Title</th><th>Type</th><th>Primary</th><th>Rating</th><th>Source</th></tr></thead>
+            <thead><tr><th>Title</th><th>Type</th><th>Primary</th><th>Rating</th><th>Source</th><th style="text-align:right;">Actions</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -620,6 +657,40 @@ export function renderDashboardHtml() {
      wipe whole sections (e.g. quota exhaustion on /api/stats). The
      section UI now stays put; the toast carries the error message. -->
 <div id="toast-host" aria-live="polite" aria-atomic="true"></div>
+
+<!-- Place editor modal — shared between "+ Add place" and "Edit" row
+     actions. The same form serves both flows; openPlaceModal() sets
+     a mode flag that decides whether to POST (create) or PATCH (update). -->
+<div id="place-modal" class="modal-overlay" hidden>
+  <div class="modal-card glass-strong">
+    <div class="modal-head">
+      <h3 id="place-modal-title">Add a place</h3>
+      <button id="place-modal-close" class="btn btn-ghost" aria-label="Close">✕</button>
+    </div>
+    <div id="place-modal-existing" class="existing-place" style="display:none;"></div>
+    <div class="edit-panel">
+      <div class="form-grid">
+        <label class="full"><div class="lbl">Title *</div><input data-pm-field="title" placeholder="Place name"></label>
+        <label><div class="lbl">Latitude *</div><input data-pm-field="lat" placeholder="31.2614"></label>
+        <label><div class="lbl">Longitude *</div><input data-pm-field="lon" placeholder="32.2811"></label>
+        <label><div class="lbl">Primary slug *</div><select data-pm-field="primary_slug"></select></label>
+        <label><div class="lbl">Type (Google business type)</div><input data-pm-field="type" placeholder="Coffee shop / Bank / Cinema…"></label>
+        <label class="full"><div class="lbl">Address</div><input data-pm-field="address"></label>
+        <label><div class="lbl">Phone</div><input data-pm-field="phone"></label>
+        <label><div class="lbl">Website</div><input data-pm-field="website" placeholder="https://example.com"></label>
+        <label><div class="lbl">Thumbnail URL</div><input data-pm-field="thumbnail"></label>
+        <label><div class="lbl">Rating (0–5)</div><input data-pm-field="rating"></label>
+        <label><div class="lbl">Reviews count</div><input data-pm-field="reviews"></label>
+        <label class="full"><div class="lbl">Source categories (comma-sep)</div><input data-pm-field="source_categories" placeholder="coffee, bakery"></label>
+      </div>
+      <div id="place-modal-status" class="status-msg full"></div>
+      <div class="save-row full">
+        <button id="place-modal-cancel" class="btn btn-ghost">Cancel</button>
+        <button id="place-modal-save" class="btn btn-primary">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script>
   // No external dependencies. All vanilla JS.
@@ -1020,12 +1091,16 @@ export function renderDashboardHtml() {
   }
 
   // ── Places ──
+  // Cache the last fetched list so the row-action handlers can look
+  // up the full record on Edit without a second network call.
+  var _placesById = {};
+
   function loadPlaces() {
     var search = $('#places-search').value.trim();
     var main = $('#places-main').value.trim();
     var sub = $('#places-sub').value.trim();
     var tbody = $('#places-table tbody');
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">Loading…</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">Loading…</td></tr>';
     // limit of 500 here gives every filtered result room to surface
     // without forcing the admin to page. The server's listPlaces
     // applies the limit AFTER filtering, so a substring search like
@@ -1041,10 +1116,13 @@ export function renderDashboardHtml() {
       .then(function(b) {
         if (!b.ok) throw new Error(b.error);
         if (!b.items.length) {
-          tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">No places match.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">No places match.</td></tr>';
+          _placesById = {};
           return;
         }
+        _placesById = {};
         tbody.innerHTML = b.items.map(function(p) {
+          _placesById[p.place_id] = p;
           var rating = (p.rating != null)
             ? p.rating + ' ★ <span style="color:rgba(255,255,255,0.4);">(' + (p.reviews || 0) + ')</span>'
             : '—';
@@ -1052,13 +1130,202 @@ export function renderDashboardHtml() {
             '<td>' + escapeHtml(p.type || '—') + '</td>' +
             '<td>' + escapeHtml(p.primary_slug || '—') + '</td>' +
             '<td>' + rating + '</td>' +
-            '<td><span class="pill pill-ghost">' + escapeHtml(p.created_via || 'scraper') + '</span></td></tr>';
+            '<td><span class="pill pill-ghost">' + escapeHtml(p.created_via || 'scraper') + '</span></td>' +
+            '<td><div class="row-actions">' +
+              '<button class="btn btn-ghost place-edit-btn" data-id="' + escapeHtml(p.place_id) + '">Edit</button>' +
+              '<button class="btn btn-danger place-delete-btn" data-id="' + escapeHtml(p.place_id) + '" data-title="' + escapeHtml(p.title || '') + '">Delete</button>' +
+            '</div></td>' +
+          '</tr>';
         }).join('');
+        wirePlacesRowActions();
       })
       .catch(function(e) {
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">Couldn\\'t load places. See toast for details.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">Couldn\\'t load places. See toast for details.</td></tr>';
         showToast('Couldn\\'t load places', friendlyApiError(e), 'err');
       });
+  }
+
+  // Wire Edit / Delete on every freshly-rendered row.
+  function wirePlacesRowActions() {
+    $$('.place-edit-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var p = _placesById[btn.dataset.id];
+        if (!p) {
+          showToast('Place not loaded', 'Refresh the list and try again.', 'err');
+          return;
+        }
+        openPlaceModal({ mode: 'edit', place: p });
+      });
+    });
+    $$('.place-delete-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var title = btn.dataset.title || '(no title)';
+        if (!confirm('Delete "' + title + '" from places + every catalogue bucket?\\nThis cannot be undone.')) return;
+        btn.disabled = true;
+        btn.textContent = '…';
+        fetch('/omar-dash/api/places/' + encodeURIComponent(btn.dataset.id), {
+          method: 'DELETE', credentials: 'same-origin',
+        })
+          .then(function(r) { return r.json(); })
+          .then(function(d) {
+            if (!d.ok) throw new Error(d.error || 'failed');
+            var removed = (d.removed_from_buckets || []).length;
+            showToast('Place deleted', 'Removed from ' + removed + ' catalogue bucket(s).', 'ok');
+            loadPlaces();
+          })
+          .catch(function(e) {
+            showToast('Delete failed', friendlyApiError(e), 'err');
+            btn.disabled = false;
+            btn.textContent = 'Delete';
+          });
+      });
+    });
+  }
+
+  // ── Place modal (Add / Edit) ──
+  var ALL_PRIMARY_SLUGS = [
+    'coffee','restaurant','fast-food','fish-seafood','bakery','dessert','candy-store',
+    'supermarket','grocery','mall','electronics','clothing','clothing-women','clothing-men','clothing-kids',
+    'shoe-store','jewelry','bookstore','stationery','gift-shop','toy-store','florist',
+    'pharmacy','clinic','hospital','dentist','veterinarian',
+    'hotel','hostel',
+    'bank','atm','money-exchange',
+    'beach','park','cinema','gym','tourist-attr','amusement-park','water-park','playground','arcade',
+    'mosque','church',
+    'gas-station','car-wash','auto-repair','car-rental','parking',
+    'other'
+  ];
+
+  // openPlaceModal({ mode: 'create' | 'edit', place?: {...} })
+  function openPlaceModal(opts) {
+    opts = opts || {};
+    var mode = opts.mode === 'edit' ? 'edit' : 'create';
+    var place = opts.place || {};
+
+    // Title + Save button copy depend on mode.
+    $('#place-modal-title').textContent = mode === 'edit' ? 'Edit place' : 'Add a place';
+    $('#place-modal-save').textContent = mode === 'edit' ? 'Save changes' : 'Create place';
+
+    // Build the primary_slug dropdown.
+    var slugSel = document.querySelector('[data-pm-field="primary_slug"]');
+    slugSel.innerHTML = '<option value="">—</option>' + ALL_PRIMARY_SLUGS.map(function(s) {
+      return '<option value="' + escapeHtml(s) + '">' + escapeHtml(s) + '</option>';
+    }).join('');
+
+    // Prefill fields.
+    function setField(name, val) {
+      var el = document.querySelector('[data-pm-field="' + name + '"]');
+      if (el) el.value = (val == null ? '' : String(val));
+    }
+    setField('title', place.title);
+    setField('lat', place.lat);
+    setField('lon', place.lon);
+    setField('primary_slug', place.primary_slug);
+    setField('type', place.type);
+    setField('address', place.address);
+    setField('phone', place.phone);
+    setField('website', place.website);
+    setField('thumbnail', place.thumbnail);
+    setField('rating', place.rating);
+    setField('reviews', place.reviews);
+    setField('source_categories',
+        Array.isArray(place.source_categories) ? place.source_categories.join(', ') : '');
+
+    // Edit mode: show the place_id banner so the admin knows what
+    // they're modifying.
+    var banner = $('#place-modal-existing');
+    if (mode === 'edit' && place.place_id) {
+      banner.style.display = 'block';
+      banner.innerHTML = 'Editing <b>' + escapeHtml(place.title || '(no title)') + '</b> — id <code>' + escapeHtml(place.place_id) + '</code>';
+    } else {
+      banner.style.display = 'none';
+      banner.textContent = '';
+    }
+
+    $('#place-modal-status').textContent = '';
+    $('#place-modal-status').className = 'status-msg full';
+    $('#place-modal').hidden = false;
+
+    // Stash mode + id so the Save handler knows which request to fire.
+    $('#place-modal').dataset.mode = mode;
+    $('#place-modal').dataset.placeId = place.place_id || '';
+  }
+
+  function closePlaceModal() { $('#place-modal').hidden = true; }
+
+  function readPlaceModalForm() {
+    var out = {};
+    $$('[data-pm-field]').forEach(function(el) {
+      var v = el.value;
+      if (v == null || v === '') return;
+      out[el.dataset.pmField] = v;
+    });
+    return out;
+  }
+
+  // Single Save handler wired once at boot — it inspects the modal's
+  // mode flag to decide POST vs PATCH.
+  function wirePlaceModalOnce() {
+    if (wirePlaceModalOnce.done) return; wirePlaceModalOnce.done = true;
+    $('#places-new-btn').addEventListener('click', function() {
+      openPlaceModal({ mode: 'create' });
+    });
+    $('#place-modal-close').addEventListener('click', closePlaceModal);
+    $('#place-modal-cancel').addEventListener('click', closePlaceModal);
+    $('#place-modal').addEventListener('click', function(e) {
+      // Clicking the overlay (outside the card) closes the modal.
+      if (e.target === $('#place-modal')) closePlaceModal();
+    });
+    $('#place-modal-save').addEventListener('click', function() {
+      var mode = $('#place-modal').dataset.mode || 'create';
+      var placeId = $('#place-modal').dataset.placeId || '';
+      var fields = readPlaceModalForm();
+      var statusEl = $('#place-modal-status');
+      function setStatus(text, cls) {
+        statusEl.textContent = text || '';
+        statusEl.className = 'status-msg full ' + (cls || '');
+      }
+      var saveBtn = $('#place-modal-save');
+      saveBtn.disabled = true;
+      var origLabel = saveBtn.textContent;
+      saveBtn.textContent = 'Saving…';
+      setStatus('Saving…');
+      var url, method;
+      if (mode === 'edit') {
+        if (!placeId) { setStatus('No place id to edit.', 'err'); saveBtn.disabled = false; saveBtn.textContent = origLabel; return; }
+        url = '/omar-dash/api/places/' + encodeURIComponent(placeId);
+        method = 'PATCH';
+      } else {
+        url = '/omar-dash/api/places';
+        method = 'POST';
+      }
+      fetch(url, {
+        method: method,
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fields),
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (!d.ok) throw new Error(d.error || 'failed');
+          showToast(
+            mode === 'edit' ? 'Place updated' : 'Place created',
+            mode === 'edit' ? 'Catalogue buckets re-synced.' : ('Doc id: ' + d.place_id),
+            'ok'
+          );
+          closePlaceModal();
+          loadPlaces();
+        })
+        .catch(function(e) {
+          setStatus(e.message || 'Save failed', 'err');
+          showToast(mode === 'edit' ? 'Update failed' : 'Create failed',
+              friendlyApiError(e), 'err');
+        })
+        .finally(function() {
+          saveBtn.disabled = false;
+          saveBtn.textContent = origLabel;
+        });
+    });
   }
 
   // ── Users ──
@@ -1630,6 +1897,7 @@ export function renderDashboardHtml() {
   setRepStatus('open');
   setInqStatus('open');
   wireSendOnce();
+  wirePlaceModalOnce();
   setView('submissions');
 </script>
 </body>
