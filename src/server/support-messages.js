@@ -99,6 +99,15 @@ export async function postMessage({
     if (parentData[ownerField] !== authorUid) {
       throw new Error('not the owner of this thread');
     }
+    // Resolved-thread guard: regular user messages are blocked once
+    // the admin marks the thread resolved. The user can still
+    // request to reopen exactly once via requestReopen() below —
+    // that's a different code path that bypasses this check.
+    if (parentData.status === 'resolved') {
+      throw new Error(
+        'This thread is resolved. Use "Request reopen" if you need to reach the team about it again.'
+      );
+    }
   }
 
   const now = new Date();
@@ -200,6 +209,9 @@ export async function listMessages({
       body: m.body,
       author: m.author,
       author_uid: m.author_uid || null,
+      // 'message' (default) or 'reopen_request'. Drives the chip
+      // overlay in both the dashboard and the mobile thread page.
+      kind: m.kind || 'message',
       created_at: m.created_at_iso ||
           (typeof m.created_at?.toDate === 'function'
               ? m.created_at.toDate().toISOString() : null),
@@ -225,5 +237,137 @@ export async function markThreadRead({
     [field]: 0,
     [`${side}_last_read_at`]: new Date(),
   });
+  return { ok: true };
+}
+
+/// User asks the admin to reopen a resolved thread. Allowed exactly
+/// ONCE per thread for the lifetime of the report/inquiry — once
+/// `reopen_requested` flips true on the parent, this throws.
+///
+/// Writes a special message with kind='reopen_request' so the chat
+/// renders it with a distinctive chip on both sides. The admin can
+/// then either reopen the thread (adminReopenThread below) or just
+/// reply normally — admin posts are always allowed regardless of
+/// status. If the admin keeps it closed, the user CAN'T request
+/// reopen again; they must file a new report/inquiry.
+export async function requestReopen({
+  db,
+  parentCollection,
+  parentId,
+  authorUid,
+  body,
+}) {
+  assertParent(parentCollection);
+  if (!parentId) throw new Error('parentId is required');
+  const cleanBody = (body || '').toString().trim().slice(0, 2000);
+  if (!cleanBody) throw new Error('Please describe why you want to reopen.');
+
+  const parentRef = db.collection(parentCollection).doc(parentId);
+  const parentSnap = await parentRef.get();
+  if (!parentSnap.exists) {
+    throw new Error(`${parentCollection}/${parentId} not found`);
+  }
+  const parentData = parentSnap.data();
+  // Ownership check.
+  const ownerField = parentCollection === 'place_reports'
+      ? 'reported_by_uid'
+      : 'user_uid';
+  if (parentData[ownerField] !== authorUid) {
+    throw new Error('not the owner of this thread');
+  }
+  // Status check — must be resolved.
+  if (parentData.status !== 'resolved') {
+    throw new Error('This thread is already open.');
+  }
+  // One-shot check.
+  if (parentData.reopen_requested === true) {
+    throw new Error(
+      'You\'ve already asked to reopen this once. Please file a new report or inquiry instead.'
+    );
+  }
+
+  const now = new Date();
+  const msgRef = parentRef.collection('messages').doc();
+  // Reopen-request messages are stored as ordinary messages with
+  // kind='reopen_request' — the renderer on both sides looks at kind
+  // to draw the chip. body holds the user's "why".
+  await msgRef.set({
+    body: cleanBody,
+    author: 'user',
+    author_uid: authorUid,
+    kind: 'reopen_request',
+    created_at: now,
+    created_at_iso: now.toISOString(),
+  });
+  await parentRef.update({
+    reopen_requested: true,
+    reopen_requested_at: now,
+    reopen_requested_at_iso: now.toISOString(),
+    reopen_request_body: cleanBody.slice(0, 280),
+    last_message_at: now,
+    last_message_at_iso: now.toISOString(),
+    last_message_author: 'user',
+    last_message_preview: '[Reopen request] ' + cleanBody.slice(0, 100),
+    // Increment admin unread so the request is visible in the
+    // dashboard's badge.
+    admin_unread_count: FieldValue.increment(1),
+  });
+
+  // Best-effort notify (currently a no-op — admin sees the badge
+  // via the dashboard's live store).
+  return {
+    id: msgRef.id,
+    parent_id: parentId,
+    kind: 'reopen_request',
+  };
+}
+
+/// Admin flips a resolved thread back to open. Idempotent on
+/// already-open threads. Note: reopen_requested STAYS true forever —
+/// the user has used their one reopen request, even if the admin
+/// later resolves again.
+export async function adminReopenThread({
+  db,
+  parentCollection,
+  parentId,
+}) {
+  assertParent(parentCollection);
+  if (!parentId) throw new Error('parentId is required');
+  const parentRef = db.collection(parentCollection).doc(parentId);
+  const parentSnap = await parentRef.get();
+  if (!parentSnap.exists) {
+    throw new Error(`${parentCollection}/${parentId} not found`);
+  }
+  const now = new Date();
+  await parentRef.update({
+    status: 'open',
+    reopened_at: now,
+    reopened_at_iso: now.toISOString(),
+    // Stamp who reopened — useful for audit.
+    reopened_by: 'admin',
+    // Clear resolution metadata so the UI doesn't show stale
+    // "Resolved on X" labels alongside an open thread.
+    resolved_at: null,
+  });
+  // FCM push happens via writeUserNotification — best-effort.
+  const data = parentSnap.data();
+  const recipientUid = parentCollection === 'place_reports'
+      ? data.reported_by_uid
+      : data.user_uid;
+  if (recipientUid) {
+    const kind = parentCollection === 'place_reports'
+        ? 'report_reopened'
+        : 'inquiry_reopened';
+    writeUserNotification(db, recipientUid, {
+      kind,
+      title: parentCollection === 'place_reports'
+          ? 'Your report has been reopened'
+          : 'Your inquiry has been reopened',
+      body: 'Our team has reopened the thread — you can continue the conversation now.',
+      place_id: data.place_id || null,
+      thread_kind: parentCollection,
+      thread_id: parentId,
+    });
+  }
   return { ok: true };
 }

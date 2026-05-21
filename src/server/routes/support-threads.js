@@ -18,7 +18,11 @@
 // same job for free.
 
 import { getFirestore } from '../../pipeline/firestore.js';
-import { postMessage, markThreadRead } from '../support-messages.js';
+import {
+  postMessage,
+  markThreadRead,
+  requestReopen,
+} from '../support-messages.js';
 
 function makeHandler(parentCollection, op) {
   return async function userSupportHandler(req, res) {
@@ -43,6 +47,15 @@ function makeHandler(parentCollection, op) {
           db, parentCollection, parentId: req.params.id, side: 'user',
         });
         return res.json({ ok: true });
+      } else if (op === 'request-reopen') {
+        const out = await requestReopen({
+          db,
+          parentCollection,
+          parentId: req.params.id,
+          authorUid: uid,
+          body: req.body?.body,
+        });
+        return res.json({ ok: true, ...out });
       }
       return res.status(400).json({ ok: false, error: 'bad op' });
     } catch (e) {
@@ -68,5 +81,9 @@ export function mountSupportThreads(app, { requireAuth }) {
         makeHandler(parentCollection, 'post'));
     app.post('/' + parent + '/:id/mark-read', requireAuth(),
         makeHandler(parentCollection, 'mark-read'));
+    // User asks the team to reopen a resolved thread. Allowed once
+    // ever per thread — second attempt returns 400.
+    app.post('/' + parent + '/:id/request-reopen', requireAuth(),
+        makeHandler(parentCollection, 'request-reopen'));
   }
 }

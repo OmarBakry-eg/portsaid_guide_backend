@@ -1395,6 +1395,12 @@ export function renderDashboardHtml() {
         $$('.thread-open-btn').forEach(function(btn) {
           btn.addEventListener('click', function() { toggleThread(btn); });
         });
+        $$('.thread-reopen-btn').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            if (!confirm('Reopen this thread? The user will be able to send messages again.')) return;
+            reopenThreadFromCard(btn);
+          });
+        });
       })
       .catch(function(e) {
         list.innerHTML = '<div class="glass-strong empty"><div class="empty-icon">⚠️</div>Couldn\\'t load reports. See toast for details.</div>';
@@ -1551,7 +1557,33 @@ export function renderDashboardHtml() {
       ? '<div style="margin-top:8px;font-size:12px;color:rgba(255,255,255,0.55);"><b>Admin response:</b> ' + escapeHtml(it.admin_response) + '</div>'
       : '';
 
+    // Reopen-request banner — only shown when the user has used
+    // their one-shot reopen request AND the thread is still
+    // resolved (so the admin sees an actionable prompt).
+    var reopenBanner = '';
+    if (it.reopen_requested && it.status === 'resolved') {
+      reopenBanner =
+        '<div style="margin-top:10px;padding:10px 12px;background:rgba(255,200,50,0.10);border-left:3px solid rgba(255,200,50,0.6);border-radius:8px;">' +
+          '<div style="font-size:11px;font-weight:800;letter-spacing:0.3px;color:#ffd060;">' +
+            '↻ REOPEN REQUESTED' +
+            (it.reopen_requested_at
+              ? ' <span style="color:rgba(255,255,255,0.5);font-weight:600;letter-spacing:0;"> · ' + fmtDate(it.reopen_requested_at) + '</span>'
+              : '') +
+          '</div>' +
+          (it.reopen_request_body
+            ? '<div style="margin-top:4px;font-size:12.5px;color:rgba(255,255,255,0.85);white-space:pre-wrap;">' + escapeHtml(it.reopen_request_body) + '</div>'
+            : '') +
+        '</div>';
+    }
+
     // Action buttons.
+    // - Always: Open thread (with unread badge)
+    // - Open status: Mark resolved
+    // - Resolved status: Reopen thread (sets status back to open)
+    // - Always: Mail link to user
+    // Note: admin can ALSO post messages inside a resolved thread
+    // without flipping status back to open — that capability lives
+    // inside the thread expansion, not here.
     var resolveBtnCls = kind === 'reports' ? 'resolve-btn' : 'inq-resolve-btn';
     var actions =
       '<div style="margin-top:14px;display:flex;gap:6px;flex-wrap:wrap;">' +
@@ -1561,7 +1593,9 @@ export function renderDashboardHtml() {
         '</button>' +
         (it.status === 'open'
           ? '<button class="btn btn-primary ' + resolveBtnCls + '" data-id="' + escapeHtml(it.id) + '">Mark resolved</button>'
-          : '') +
+          : '<button class="btn btn-primary thread-reopen-btn" data-thread-kind="' + kind + '" data-thread-id="' + escapeHtml(it.id) + '">' +
+              (it.reopen_requested ? 'Reopen thread' : 'Reopen anyway') +
+            '</button>') +
         (fromEmail
           ? '<a class="btn btn-ghost" href="mailto:' + escapeHtml(fromEmail) + '" target="_blank" rel="noopener">Mail</a>'
           : '') +
@@ -1575,11 +1609,39 @@ export function renderDashboardHtml() {
         (fromName ? ' <span style="color:rgba(255,255,255,0.45);">(' + escapeHtml(fromName) + ')</span>' : '') +
       '</div>' +
       placeBlock +
+      reopenBanner +
       threadSummary +
       responseLine +
       actions +
       '<div class="thread-mount" data-mount-kind="' + kind + '" data-mount-id="' + escapeHtml(it.id) + '" style="display:none;"></div>' +
     '</div>';
+  }
+
+  // Admin clicks "Reopen thread" — POST /reopen on the matching
+  // collection. The live-store picks up the status flip; we just
+  // reload the list view to refresh the pill + actions.
+  function reopenThreadFromCard(btn) {
+    var kind = btn.dataset.threadKind;
+    var id = btn.dataset.threadId;
+    btn.disabled = true;
+    var origLabel = btn.textContent;
+    btn.textContent = 'Reopening…';
+    fetch('/omar-dash/api/' + kind + '/' + encodeURIComponent(id) + '/reopen', {
+      method: 'POST', credentials: 'same-origin',
+    })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (!d.ok) throw new Error(d.error || 'failed');
+        showToast('Thread reopened',
+            'User can post in this thread again.', 'ok');
+        if (kind === 'reports') loadReports();
+        else loadInquiries();
+      })
+      .catch(function(e) {
+        showToast('Reopen failed', friendlyApiError(e), 'err');
+        btn.disabled = false;
+        btn.textContent = origLabel;
+      });
   }
 
   // Lazy-render the thread under a card. Fetches messages, draws
@@ -1622,14 +1684,27 @@ export function renderDashboardHtml() {
   function renderThreadInside(messages, kind, id) {
     var bubbles = messages.length
       ? messages.map(function(m) {
-          var who = m.author === 'admin' ? 'You (admin)' : 'User';
-          var align = m.author === 'admin' ? 'flex-end' : 'flex-start';
-          var bg = m.author === 'admin'
-              ? 'rgba(255,149,85,0.18)'
-              : 'rgba(255,255,255,0.06)';
+          var isAdmin = m.author === 'admin';
+          var who = isAdmin ? 'You (admin)' : 'User';
+          var align = isAdmin ? 'flex-end' : 'flex-start';
+          // Reopen-request user messages get a yellow tint + chip so
+          // the admin instantly spots which message is the request
+          // rather than a regular reply.
+          var isReopenReq = m.kind === 'reopen_request';
+          var bg = isReopenReq
+              ? 'rgba(255,200,50,0.14)'
+              : (isAdmin
+                  ? 'rgba(255,149,85,0.18)'
+                  : 'rgba(255,255,255,0.06)');
+          var border = isReopenReq
+              ? 'rgba(255,200,50,0.40)'
+              : 'rgba(255,255,255,0.08)';
+          var chip = isReopenReq
+              ? '<span style="display:inline-block;margin-right:6px;padding:1px 6px;border-radius:99px;background:rgba(255,200,50,0.20);color:#ffd060;font-size:9.5px;font-weight:800;letter-spacing:0.3px;vertical-align:middle;">↻ REQUESTED TO REOPEN</span>'
+              : '';
           return '<div style="display:flex;justify-content:' + align + ';">' +
-            '<div style="max-width:78%;padding:8px 12px;border-radius:12px;background:' + bg + ';border:1px solid rgba(255,255,255,0.08);">' +
-              '<div style="font-size:10.5px;color:rgba(255,255,255,0.55);margin-bottom:2px;">' + escapeHtml(who) + ' · ' + fmtDate(m.created_at) + '</div>' +
+            '<div style="max-width:78%;padding:8px 12px;border-radius:12px;background:' + bg + ';border:1px solid ' + border + ';">' +
+              '<div style="font-size:10.5px;color:rgba(255,255,255,0.55);margin-bottom:2px;">' + chip + escapeHtml(who) + ' · ' + fmtDate(m.created_at) + '</div>' +
               '<div style="font-size:12.5px;white-space:pre-wrap;">' + escapeHtml(m.body) + '</div>' +
             '</div>' +
           '</div>';
@@ -1640,6 +1715,9 @@ export function renderDashboardHtml() {
       '<div style="margin-top:10px;display:flex;gap:6px;">' +
         '<textarea class="thread-input" placeholder="Reply…" rows="2" style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.10);border-radius:8px;padding:8px 10px;font-size:13px;color:white;resize:vertical;font-family:inherit;"></textarea>' +
         '<button class="btn btn-primary thread-send-btn" style="align-self:flex-end;">Send</button>' +
+      '</div>' +
+      '<div style="margin-top:6px;font-size:11px;color:rgba(255,255,255,0.45);">' +
+        'Admin replies are allowed even on resolved threads — the user just can\\'t send new messages until you reopen.' +
       '</div>' +
       '<div class="thread-status status-msg full"></div>' +
     '</div>';
@@ -1722,6 +1800,12 @@ export function renderDashboardHtml() {
         });
         $$('.thread-open-btn').forEach(function(btn) {
           btn.addEventListener('click', function() { toggleThread(btn); });
+        });
+        $$('.thread-reopen-btn').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            if (!confirm('Reopen this thread? The user will be able to send messages again.')) return;
+            reopenThreadFromCard(btn);
+          });
         });
       })
       .catch(function(e) {

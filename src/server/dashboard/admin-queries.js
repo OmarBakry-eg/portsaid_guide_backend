@@ -272,6 +272,12 @@ export async function listReports({ status = 'open', limit = 100 }) {
       user_unread_count: r.user_unread_count || 0,
       resolved_at: tsIso(r.resolved_at),
       admin_response: r.admin_response || null,
+      // Reopen lifecycle (see src/server/support-messages.js).
+      reopen_requested: r.reopen_requested === true,
+      reopen_requested_at:
+          r.reopen_requested_at_iso || tsIso(r.reopen_requested_at),
+      reopen_request_body: r.reopen_request_body || null,
+      reopened_at: r.reopened_at_iso || tsIso(r.reopened_at),
     };
   });
 }
@@ -350,6 +356,12 @@ export async function listInquiries({ status = 'open', limit = 100 }) {
       last_message_preview: r.last_message_preview || null,
       admin_unread_count: r.admin_unread_count || 0,
       user_unread_count: r.user_unread_count || 0,
+      // Reopen lifecycle (see src/server/support-messages.js).
+      reopen_requested: r.reopen_requested === true,
+      reopen_requested_at:
+          r.reopen_requested_at_iso || tsIso(r.reopen_requested_at),
+      reopen_request_body: r.reopen_request_body || null,
+      reopened_at: r.reopened_at_iso || tsIso(r.reopened_at),
     };
   });
 }

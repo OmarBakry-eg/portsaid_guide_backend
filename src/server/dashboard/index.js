@@ -61,6 +61,7 @@ import {
   postMessage,
   listMessages,
   markThreadRead,
+  adminReopenThread,
 } from '../support-messages.js';
 import { renderDashboardHtml } from './views/dashboard-html.js';
 
@@ -351,6 +352,20 @@ export function mountDashboard(app) {
         const db = await getFirestore();
         await markThreadRead({
           db, parentCollection, parentId: req.params.id, side: 'admin',
+        });
+        res.json({ ok: true });
+      })
+    );
+
+    // Admin reopens a resolved thread → status flips to 'open' and
+    // the user is notified. Idempotent on already-open threads.
+    app.post(
+      '/omar-dash/api/' + parent + '/:id/reopen',
+      basicAuthGate,
+      jsonHandler(async (req, res) => {
+        const db = await getFirestore();
+        await adminReopenThread({
+          db, parentCollection, parentId: req.params.id,
         });
         res.json({ ok: true });
       })
