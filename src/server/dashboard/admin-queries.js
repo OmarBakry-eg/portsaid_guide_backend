@@ -214,23 +214,52 @@ export async function listReports({ status = 'open', limit = 100 }) {
       ? all.filter((r) => r.status === status)
       : all;
   return filtered.slice(0, limit).map((r) => {
+    // Prefer the snapshot we captured at report-time (survives place
+    // edits + deletions). Fall back to live lookup for older reports
+    // that pre-date the snapshot field.
+    const snap = r.place_snapshot || null;
     const place = r.place_id ? placesById.get(r.place_id) : null;
-    const creatorUid = place?.created_by_uid || null;
-    const creator = creatorUid ? usersByUid.get(creatorUid) : null;
+    const creatorUid = r.place_creator_uid
+        || place?.created_by_uid
+        || null;
+    const liveCreator = creatorUid ? usersByUid.get(creatorUid) : null;
     return {
       id: r.id,
       place_id: r.place_id || null,
-      // Augmented place info — gives the admin context about WHAT
-      // is being reported without a click-through.
-      place_title: place?.title || null,
-      place_primary_slug: place?.primary_slug || null,
-      place_created_via: place?.created_via || null,
+      // Title + slug — snapshot first, live lookup fallback.
+      place_title: snap?.title || place?.title || null,
+      place_primary_slug: snap?.primary_slug || place?.primary_slug || null,
+      // Extra snapshot fields the dashboard can render in the
+      // "About" block (address, phone, website, rating, coords).
+      place_snapshot: snap || (place ? {
+        title: place.title || null,
+        type: place.type || null,
+        primary_slug: place.primary_slug || null,
+        address: place.address || null,
+        phone: place.phone || null,
+        website: place.website || null,
+        thumbnail: place.thumbnail || null,
+        rating: place.rating ?? null,
+        reviews: place.reviews ?? null,
+        lat: place.gps_coordinates?.latitude ?? null,
+        lon: place.gps_coordinates?.longitude ?? null,
+        source_categories: place.source_categories || [],
+      } : null),
+      place_created_via: r.place_created_via
+          || place?.created_via
+          || null,
       place_created_by_uid: creatorUid,
-      place_creator_email: creator?.email || null,
-      place_creator_name: creator?.display_name || null,
+      place_creator_email: r.place_creator_email
+          || liveCreator?.email
+          || null,
+      place_creator_name: r.place_creator_name
+          || liveCreator?.display_name
+          || null,
+      place_submission_id: r.place_submission_id || place?.submission_id || null,
       // Reporter info.
       reported_by_uid: r.reported_by_uid || null,
       reported_by_email: r.reported_by_email || null,
+      reporter_name: r.reporter_name || null,
       reason: r.reason || null,
       note: r.note || null,
       status: r.status,
@@ -268,21 +297,46 @@ export async function listInquiries({ status = 'open', limit = 100 }) {
       ? all.filter((r) => r.status === status)
       : all;
   return filtered.slice(0, limit).map((r) => {
+    // Same snapshot-first pattern as listReports.
+    const snap = r.place_snapshot || null;
     const place = r.place_id ? placesById.get(r.place_id) : null;
-    const creatorUid = place?.created_by_uid || null;
-    const creator = creatorUid ? usersByUid.get(creatorUid) : null;
+    const creatorUid = r.place_creator_uid
+        || place?.created_by_uid
+        || null;
+    const liveCreator = creatorUid ? usersByUid.get(creatorUid) : null;
     return {
       id: r.id,
       user_uid: r.user_uid,
       user_email: r.user_email,
       user_name: r.user_name,
       place_id: r.place_id || null,
-      place_title: place?.title || null,
-      place_primary_slug: place?.primary_slug || null,
-      place_created_via: place?.created_via || null,
+      place_title: snap?.title || place?.title || null,
+      place_primary_slug: snap?.primary_slug || place?.primary_slug || null,
+      place_snapshot: snap || (place ? {
+        title: place.title || null,
+        type: place.type || null,
+        primary_slug: place.primary_slug || null,
+        address: place.address || null,
+        phone: place.phone || null,
+        website: place.website || null,
+        thumbnail: place.thumbnail || null,
+        rating: place.rating ?? null,
+        reviews: place.reviews ?? null,
+        lat: place.gps_coordinates?.latitude ?? null,
+        lon: place.gps_coordinates?.longitude ?? null,
+        source_categories: place.source_categories || [],
+      } : null),
+      place_created_via: r.place_created_via
+          || place?.created_via
+          || null,
       place_created_by_uid: creatorUid,
-      place_creator_email: creator?.email || null,
-      place_creator_name: creator?.display_name || null,
+      place_creator_email: r.place_creator_email
+          || liveCreator?.email
+          || null,
+      place_creator_name: r.place_creator_name
+          || liveCreator?.display_name
+          || null,
+      place_submission_id: r.place_submission_id || place?.submission_id || null,
       submission_id: r.submission_id || null,
       subject: r.subject,
       body: r.body,

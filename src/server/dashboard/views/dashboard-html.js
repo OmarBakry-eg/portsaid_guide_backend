@@ -1439,32 +1439,95 @@ export function renderDashboardHtml() {
         : escapeHtml(fromUid || '(unknown user)');
 
     // Place context (when the report/inquiry is about a place).
+    // Renders the full denormalised snapshot — title, type, slug,
+    // address, phone, website, rating, photo + creator chain — so the
+    // admin sees everything they need to triage WITHOUT clicking
+    // through to the place detail page. Snapshot was captured at
+    // report/inquiry write time; falls back to live place data if
+    // the entry pre-dates the snapshot field.
     var placeBlock = '';
     if (it.place_id) {
+      var snap = it.place_snapshot || {};
       var creator = '';
       if (it.place_created_by_uid) {
         var who = it.place_creator_email
             ? escapeHtml(it.place_creator_email)
             : escapeHtml(it.place_created_by_uid);
         creator =
-          '<div style="margin-top:4px;font-size:11.5px;color:rgba(255,255,255,0.6);">' +
+          '<div style="margin-top:6px;font-size:11.5px;color:rgba(255,255,255,0.6);">' +
             'Added by user ' + who +
             (it.place_creator_name
               ? ' <span style="color:rgba(255,255,255,0.45);">(' + escapeHtml(it.place_creator_name) + ')</span>'
               : '') +
             ' via <span class="pill pill-ghost" style="font-size:10px;">' + escapeHtml(it.place_created_via || 'scraper') + '</span>' +
+            (it.place_submission_id
+              ? ' <span style="color:rgba(255,255,255,0.45);font-family:ui-monospace,monospace;font-size:10px;">· submission ' + escapeHtml(it.place_submission_id) + '</span>'
+              : '') +
+          '</div>';
+      } else if (it.place_created_via) {
+        creator =
+          '<div style="margin-top:6px;font-size:11.5px;color:rgba(255,255,255,0.6);">' +
+            'Source: <span class="pill pill-ghost" style="font-size:10px;">' + escapeHtml(it.place_created_via) + '</span>' +
           '</div>';
       }
+
+      // Build the optional rows (only show fields that have values).
+      var rows = '';
+      function row(label, value, opts) {
+        if (value == null || value === '') return;
+        opts = opts || {};
+        var rendered;
+        if (opts.link) {
+          rendered = '<a class="url" href="' + escapeHtml(opts.link) + '" target="_blank" rel="noopener">' + escapeHtml(String(value)) + '</a>';
+        } else if (opts.mono) {
+          rendered = '<span style="font-family:ui-monospace,monospace;font-size:11px;">' + escapeHtml(String(value)) + '</span>';
+        } else {
+          rendered = escapeHtml(String(value));
+        }
+        rows += '<div style="font-size:11.5px;line-height:1.45;"><span style="color:rgba(255,255,255,0.5);">' + label + ':</span> ' + rendered + '</div>';
+      }
+      row('Type', snap.type);
+      row('Address', snap.address);
+      if (snap.phone) row('Phone', snap.phone, { link: 'tel:' + snap.phone });
+      if (snap.website) row('Website', snap.website, { link: snap.website });
+      if (snap.rating != null) {
+        row('Rating', snap.rating + ' ★ (' + (snap.reviews || 0) + ' reviews)');
+      }
+      if (typeof snap.lat === 'number' && typeof snap.lon === 'number') {
+        var ll = snap.lat.toFixed(6) + ', ' + snap.lon.toFixed(6);
+        var mapUrl = 'https://maps.google.com/?q=' + snap.lat + ',' + snap.lon;
+        row('Coords', ll, { link: mapUrl });
+      }
+      if (Array.isArray(snap.source_categories) && snap.source_categories.length) {
+        row('Categories', snap.source_categories.join(', '));
+      }
+
+      // Thumbnail strip (small inline image when present).
+      var thumb = '';
+      if (snap.thumbnail) {
+        thumb =
+          '<img src="' + escapeHtml(snap.thumbnail) + '" alt="" referrerpolicy="no-referrer" loading="lazy" ' +
+            'style="width:56px;height:56px;border-radius:8px;object-fit:cover;border:1px solid rgba(255,255,255,0.10);flex-shrink:0;">';
+      }
+
       placeBlock =
-        '<div style="margin-top:10px;padding:8px 10px;background:rgba(255,255,255,0.04);border-radius:8px;border:1px solid rgba(255,255,255,0.08);">' +
-          '<div style="font-size:12.5px;font-weight:600;">About: ' +
-            (it.place_title ? escapeHtml(it.place_title) : '(place not yet in catalogue)') +
-            (it.place_primary_slug
-              ? ' <span class="pill pill-ghost" style="font-size:10px;margin-left:6px;">' + escapeHtml(it.place_primary_slug) + '</span>'
-              : '') +
+        '<div style="margin-top:10px;padding:10px 12px;background:rgba(255,255,255,0.04);border-radius:10px;border:1px solid rgba(255,255,255,0.08);">' +
+          '<div style="display:flex;gap:10px;align-items:flex-start;">' +
+            thumb +
+            '<div style="flex:1;min-width:0;">' +
+              '<div style="font-size:13px;font-weight:700;">' +
+                (it.place_title ? escapeHtml(it.place_title) : '(place not yet in catalogue)') +
+                (it.place_primary_slug
+                  ? ' <span class="pill pill-ghost" style="font-size:10px;margin-left:6px;vertical-align:middle;">' + escapeHtml(it.place_primary_slug) + '</span>'
+                  : '') +
+              '</div>' +
+              '<div style="margin-top:2px;font-size:10.5px;font-family:ui-monospace,monospace;color:rgba(255,255,255,0.45);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(it.place_id) + '</div>' +
+              (rows
+                ? '<div style="margin-top:6px;display:flex;flex-direction:column;gap:2px;">' + rows + '</div>'
+                : '') +
+              creator +
+            '</div>' +
           '</div>' +
-          '<div style="margin-top:2px;font-size:10.5px;font-family:ui-monospace,monospace;color:rgba(255,255,255,0.45);">' + escapeHtml(it.place_id) + '</div>' +
-          creator +
         '</div>';
     }
 

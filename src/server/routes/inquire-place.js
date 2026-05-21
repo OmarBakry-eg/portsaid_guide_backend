@@ -116,6 +116,56 @@ async function inquire(req, res) {
     // Non-fatal — proceed without it.
   }
 
+  // Rich context: denormalise the referenced place + its creator
+  // when the inquiry has a place_id. Same intent as reports — keep
+  // the admin dashboard's per-inquiry view self-contained even if
+  // the place is later edited or deleted.
+  let placeSnapshot = null;
+  let placeCreatedVia = null;
+  let placeCreatorUid = null;
+  let placeCreatorEmail = null;
+  let placeCreatorName = null;
+  let placeSubmissionId = null;
+  if (placeId) {
+    try {
+      const placeSnap = await db.collection('places').doc(placeId).get();
+      if (placeSnap.exists) {
+        const p = placeSnap.data();
+        const coords = p.gps_coordinates;
+        placeSnapshot = {
+          title: p.title || null,
+          type: p.type || null,
+          primary_slug: p.primary_slug || null,
+          address: p.address || null,
+          phone: p.phone || null,
+          website: p.website || null,
+          thumbnail: p.thumbnail || null,
+          rating: typeof p.rating === 'number' ? p.rating : null,
+          reviews: typeof p.reviews === 'number' ? p.reviews : null,
+          lat: typeof coords?.latitude === 'number' ? coords.latitude : null,
+          lon: typeof coords?.longitude === 'number' ? coords.longitude : null,
+          source_categories: Array.isArray(p.source_categories)
+              ? p.source_categories : [],
+        };
+        placeCreatedVia = p.created_via || 'scraper';
+        placeCreatorUid = p.created_by_uid || null;
+        placeSubmissionId = p.submission_id || null;
+        if (placeCreatorUid) {
+          try {
+            const creatorSnap = await db.collection('users')
+                .doc(placeCreatorUid).get();
+            if (creatorSnap.exists) {
+              placeCreatorEmail = creatorSnap.data().email || null;
+              placeCreatorName = creatorSnap.data().display_name || null;
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (_) {
+      // Non-fatal — inquiry still writes without place context.
+    }
+  }
+
   const now = new Date();
   const ref = db.collection('place_inquiries').doc();
   await ref.set({
@@ -129,6 +179,13 @@ async function inquire(req, res) {
     status: 'open',
     created_at: now,
     created_at_iso: now.toISOString(),
+    // Rich place context captured at write time.
+    place_snapshot: placeSnapshot,
+    place_created_via: placeCreatedVia,
+    place_creator_uid: placeCreatorUid,
+    place_creator_email: placeCreatorEmail,
+    place_creator_name: placeCreatorName,
+    place_submission_id: placeSubmissionId,
   });
 
   console.log(
