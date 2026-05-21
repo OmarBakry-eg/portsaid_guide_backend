@@ -423,6 +423,17 @@ export async function approveSubmission(id, { adminNote }) {
     for (const k of Object.keys(place)) if (place[k] == null) delete place[k];
     enrichWithScores(place);
 
+    // Belt-and-braces: Firestore rejects undefined field values
+    // unless ignoreUndefinedProperties is set on the client — which
+    // can silently NOT be the case when firebase-admin was
+    // initialised by another module (e.g. the auth middleware) before
+    // pipeline/firestore.js got to call .settings(). Strip any
+    // remaining undefineds here so an admin approve never fails with
+    // "Cannot use undefined as a Firestore value (found in field …)".
+    for (const k of Object.keys(place)) {
+      if (place[k] === undefined) delete place[k];
+    }
+
     await placeRef.set(place);
   }
 

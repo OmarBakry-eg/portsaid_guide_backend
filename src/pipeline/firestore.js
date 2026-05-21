@@ -63,14 +63,24 @@ export async function getFirestore() {
   // Brand-new places may have no rating / weighted_rating yet. Treat
   // `undefined` field values as "field absent" instead of throwing.
   //
-  // settings() can only be called ONCE per Firestore instance. If
-  // another module already initialized the app + called settings()
-  // (e.g. recategorize-firestore.js does its own initializeApp +
-  // settings at the top, then calls into us for the index rebuild),
-  // skipping is the right move — we trust whoever got there first
-  // has configured equivalent settings.
-  if (weInitialized) {
+  // settings() can only be called ONCE per Firestore instance. We
+  // ALWAYS try — if some other module (the auth middleware in
+  // src/server/middleware/firebase-auth.js was the real-world
+  // offender) initialised the app first WITHOUT calling settings,
+  // the prior comment's "trust whoever got there first" assumption
+  // silently turned this off and admin-manual approves of brand-new
+  // places without ratings failed with "Cannot use undefined as a
+  // Firestore value (found in field 'weighted_rating')". The
+  // catch-and-ignore keeps the legitimately-double-init case
+  // working (e.g. recategorize-firestore.js).
+  try {
     _db.settings({ ignoreUndefinedProperties: true });
+  } catch (e) {
+    // The only error settings() throws here is "Firestore has
+    // already been initialized. You can only call settings() once,
+    // and only before calling any other methods on a Firestore
+    // object." That's fine — the OTHER caller probably set the
+    // same flag.
   }
   return _db;
 }

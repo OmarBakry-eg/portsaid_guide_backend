@@ -112,10 +112,20 @@ export function isAccepted(place) {
 
 /// Compute all derived fields and attach them to the place. Mutates and
 /// returns the same object for convenience. Idempotent — safe to re-run.
+///
+/// IMPORTANT: every assigned field is coalesced to a Firestore-safe
+/// type (number or null). `weightedRating` returns `undefined` when
+/// the input rating is invalid (0 reviews / no rating), and Firestore
+/// REJECTS undefined fields unless `ignoreUndefinedProperties` is
+/// set globally — which it might not be when the admin auth path
+/// initialised the firebase-admin app first. Writing null is safe in
+/// every Firestore configuration AND preserves the "field is empty"
+/// semantics callers depend on (`(p.weighted_rating ?? -Infinity)`).
 export function enrichWithScores(place) {
   const wr = weightedRating(place);
-  place.weighted_rating = wr;
+  const ss = sortScore(place, wr);
+  place.weighted_rating = (typeof wr === 'number') ? wr : null;
   place.quality_score = qualityScore(place);
-  place.sort_score = sortScore(place, wr);
+  place.sort_score = (typeof ss === 'number') ? ss : 0;
   return place;
 }
