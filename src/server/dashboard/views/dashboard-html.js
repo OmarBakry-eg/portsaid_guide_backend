@@ -1421,7 +1421,10 @@ export function renderDashboardHtml() {
             if (!d.ok) throw new Error(d.error || 'failed');
             var removed = (d.removed_from_buckets || []).length;
             showToast('Place deleted', 'Removed from ' + removed + ' catalogue bucket(s).', 'ok');
-            loadPlaces();
+            // Mutation shifts the row order — nuke the client cache
+            // so the next page-load fetches fresh from the server.
+            _placesCache.clear();
+            loadPlaces({ bypassCache: true });
           })
           .catch(function(e) {
             showToast('Delete failed', friendlyApiError(e), 'err');
@@ -1564,7 +1567,10 @@ export function renderDashboardHtml() {
             'ok'
           );
           closePlaceModal();
-          loadPlaces();
+          // Create/edit can change ordering AND total count — nuke
+          // the whole client cache so adjacent pages are also fresh.
+          _placesCache.clear();
+          loadPlaces({ bypassCache: true });
         })
         .catch(function(e) {
           setStatus(e.message || 'Save failed', 'err');
