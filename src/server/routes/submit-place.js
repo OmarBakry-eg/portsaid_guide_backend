@@ -82,16 +82,29 @@ async function getDailyCount(db, uid) {
   return count;
 }
 
-/// Look up a place in places/ by either hex CID or lat/lon proximity
-/// (when the URL didn't carry a clean hex pair). Returns the matched
-/// place doc data + its id, or null.
-async function findExistingPlace(db, { hexPair, lat, lon }) {
-  if (hexPair) {
-    // Some scrape paths store the hex pair as the doc id; others use
-    // the ChIJ-form place_id. Try both:
-    //   a) field match on a `cid_hex` / `data_id_alt` if present;
-    //   b) doc id starts with hex pair (newer ingestions).
-    // We'll just do a field-equality on `place_id` and `cid_hex`.
+/// Look up an EXISTING place by its identity. We deliberately do NOT
+/// fall back to geo-proximity matching — that was a false-positive
+/// trap. Real-world example that motivated the change: a user shared
+/// "Prova" from Google Maps; the URL resolver gave us a valid hex
+/// pair, but no existing place doc had that hex_pair. The OLD code
+/// then ran a ~33 m radius scan and returned a totally different
+/// Arabic restaurant nearby as a "duplicate." The user got an
+/// `outcome: duplicate` for a place that wasn't actually theirs.
+///
+/// Strict matching now:
+///   1. hex_pair → `cid_hex` field equality
+///   2. hex_pair → doc id equality (newer ingestions store the hex
+///      as the doc id; ChIJ-form ids also live under doc id)
+///   3. If neither matches → null. The submission then proceeds as
+///      a new place (scrape, classify, OR admin review).
+///
+/// A user submitting a real duplicate from a different URL form
+/// (CID-only, no hex pair) will land in admin review where the
+/// admin can spot it and reject.
+async function findExistingPlace(db, { hexPair }) {
+  if (!hexPair) return null;
+  // (1) cid_hex field equality
+  try {
     const directQ = await db
         .collection('places')
         .where('cid_hex', '==', hexPair)
@@ -101,29 +114,17 @@ async function findExistingPlace(db, { hexPair, lat, lon }) {
       const doc = directQ.docs[0];
       return { id: doc.id, data: doc.data() };
     }
+  } catch (_) {
+    // No-op; fall through to doc-id check.
   }
-  // Geo proximity fallback — places within ~30 m of the URL coords.
-  // Firestore range queries are single-field, so we can't bbox both
-  // axes server-side. Fetch lat-range candidates and filter lon
-  // client-side. 30 m at this latitude is ~0.00027 ° lat / ~0.00032 ° lon.
-  if (typeof lat === 'number' && typeof lon === 'number') {
-    const dLat = 0.0003;
-    const dLon = 0.00035;
-    const candSnap = await db
-        .collection('places')
-        .where('gps_coordinates.latitude', '>=', lat - dLat)
-        .where('gps_coordinates.latitude', '<=', lat + dLat)
-        .limit(20)
-        .get();
-    for (const doc of candSnap.docs) {
-      const data = doc.data();
-      const pLon = data.gps_coordinates?.longitude;
-      if (typeof pLon !== 'number') continue;
-      if (Math.abs(pLon - lon) <= dLon) {
-        return { id: doc.id, data };
-      }
+  // (2) Doc id equality — covers the cases where the hex pair IS the
+  // place_id (or close to it). Cheap point-read, single query.
+  try {
+    const byId = await db.collection('places').doc(hexPair).get();
+    if (byId.exists) {
+      return { id: byId.id, data: byId.data() };
     }
-  }
+  } catch (_) {}
   return null;
 }
 
@@ -208,7 +209,8 @@ async function submitPlace(req, res) {
       console.log('[submit-place] reject: no uid');
       return res.status(401).json({ error: 'unauthenticated' });
     }
-    const url = (req.body?.url || '').toString().trim();
+    const rawUrl = (req.body?.url || '').toString();
+    const url = rawUrl.trim();
     if (!url) {
       log(req, 'reject: missing url');
       return res.status(400).json({
@@ -216,7 +218,24 @@ async function submitPlace(req, res) {
         message: 'Pass `url` in the request body.',
       });
     }
-    log(req, 'start');
+    // Detailed input dump for real-device debugging. Logs the input
+    // verbatim AND a hex dump of any non-ASCII characters — iOS
+    // clipboards sometimes embed zero-width / RTL marks (U+200E etc.)
+    // that survive trim() but make `new URL()` throw, so we want to
+    // SEE them in Render logs when a real device fails where the
+    // simulator works.
+    const nonAscii = [];
+    for (let i = 0; i < rawUrl.length; i++) {
+      const code = rawUrl.charCodeAt(i);
+      if (code < 0x20 || code > 0x7e) {
+        nonAscii.push({ i, code: '0x' + code.toString(16) });
+      }
+    }
+    log(req, 'start', {
+      url_len: rawUrl.length,
+      trimmed_len: url.length,
+      non_ascii: nonAscii.slice(0, 8),
+    });
     const db = await getDb();
     log(req, 'db ready');
 
@@ -251,10 +270,10 @@ async function submitPlace(req, res) {
     }
 
     // 2. Try to match against existing places/ before scraping.
+    // Strict hex_pair matching only — see findExistingPlace doc-comment
+    // for why we dropped geo-proximity.
     const existing = await findExistingPlace(db, {
       hexPair: parsed.place_hex_pair,
-      lat: parsed.lat,
-      lon: parsed.lon,
     });
     log(req, 'duplicate-check done', {
       found: !!existing,

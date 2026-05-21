@@ -53,11 +53,23 @@
 ///                a user-facing one-liner the mobile can surface.
 export function parseGoogleMapsUrl(input) {
   if (typeof input !== 'string' || !input.trim()) {
-    return { rejection: 'Empty URL. Paste a Google Maps link.' };
+    return { rejection: 'Empty URL. Paste a map link.' };
   }
+  // Sanitise zero-width + RTL marks + BOM before the URL parse. iOS
+  // clipboards (and some chat apps) frequently embed invisibles when
+  // copying — particularly U+200E/U+200F directional marks around
+  // URLs in Arabic-locale UI text — that survive String#trim() but
+  // make `new URL(input)` throw.
+  const cleaned = input
+      // U+200B–U+200F: zero-width space, ZWNJ, ZWJ, LRM, RLM
+      // U+202A–U+202E: directional formatting (LRE/RLE/PDF/LRO/RLO)
+      // U+2066–U+2069: directional isolates
+      // U+FEFF:        BOM / zero-width no-break space
+      .replace(/[​-‏‪-‮⁦-⁩﻿]/g, '')
+      .trim();
   let url;
   try {
-    url = new URL(input.trim());
+    url = new URL(cleaned);
   } catch {
     return { rejection: 'That doesn\'t look like a URL.' };
   }
@@ -103,14 +115,11 @@ export function parseGoogleMapsUrl(input) {
   if (isApple) {
     return parseAppleMapsUrl(url);
   }
-  // 4. Search query only — reject early. /maps?q=... is a "search the
-  // map" URL, not a specific place.
-  if ((path === '/maps' || path === '/maps/') && url.searchParams.has('q')) {
-    return {
-      rejection:
-        'That link is a search query, not a specific place. Open the place on Google Maps, tap Share, then paste here.',
-    };
-  }
+  // (4 removed) — the old "reject /maps?q=..." path was too aggressive.
+  // The new permissive matcher below treats `q=lat,lon` as coords (a
+  // real place pointer) and `q=text` as a search-name hint (passed to
+  // admin review). The dedicated rejection at the end of this function
+  // still catches the genuinely-empty case.
   // 3. Numeric CID — /maps?cid=<decimal>
   if (url.searchParams.has('cid')) {
     const cid = url.searchParams.get('cid');
@@ -128,17 +137,34 @@ export function parseGoogleMapsUrl(input) {
       };
     }
   }
-  // 2. Long form — extract hex pair + decimal coords from data= segment.
-  if (path.startsWith('/maps/place/') || path.startsWith('/maps/dir/')) {
+  // 2. Long form — extract whatever signal we can from any URL with
+  //    `/maps`-style path. The previous version only accepted
+  //    /maps/place/ and /maps/dir/, and rejected anything that even
+  //    LOOKED like Maps but used a different path shape (e.g. iOS
+  //    occasionally produces /maps/@lat,lon URLs after a share). With
+  //    the more permissive shape below + the new admin-review path
+  //    in the submit handler, the user gets their submission
+  //    accepted instead of a hard rejection.
+  const isMapsPath =
+      path.startsWith('/maps/place/') ||
+      path.startsWith('/maps/dir/') ||
+      path.startsWith('/maps/@') ||
+      path === '/maps' ||
+      path === '/maps/' ||
+      path.startsWith('/maps?') ||
+      // Match anything under /maps/* that isn't already a special
+      // shape we've handled.
+      /^\/maps(\/|$)/.test(path);
+  if (isMapsPath) {
     const data = url.searchParams.get('data') || '';
     const segments = path + (data ? '?data=' + data : '');
-    const hexPairMatch = segments.match(
-      /!1s(0x[0-9a-f]+:0x[0-9a-f]+)/i
-    );
-    // Coords: `!8m2!3d<lat>!4d<lon>` or `!3d<lat>!4d<lon>` directly.
+    const hexPairMatch = segments.match(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/i);
     const coordsMatch = segments.match(/!3d(-?[0-9.]+)!4d(-?[0-9.]+)/);
-    // Alternate coords from the @lat,lon,zoom pattern in the path.
-    const atMatch = path.match(/@(-?[0-9.]+),(-?[0-9.]+),[0-9.]+/);
+    const atMatch = path.match(/@(-?[0-9.]+),(-?[0-9.]+)/);
+    // ll= and q=lat,lon are alternate coord encodings some share URLs
+    // produce. Try them as last-resort signal.
+    const llParam = url.searchParams.get('ll');
+    const qParam = url.searchParams.get('q');
     let lat = null;
     let lon = null;
     if (coordsMatch) {
@@ -147,18 +173,39 @@ export function parseGoogleMapsUrl(input) {
     } else if (atMatch) {
       lat = parseFloat(atMatch[1]);
       lon = parseFloat(atMatch[2]);
+    } else if (llParam && llParam.includes(',')) {
+      const [la, lo] = llParam.split(',', 2).map(parseFloat);
+      if (Number.isFinite(la) && Number.isFinite(lo)) { lat = la; lon = lo; }
+    } else if (qParam && /^-?[0-9.]+,-?[0-9.]+$/.test(qParam)) {
+      const [la, lo] = qParam.split(',', 2).map(parseFloat);
+      if (Number.isFinite(la) && Number.isFinite(lo)) { lat = la; lon = lo; }
     }
-    if (!hexPairMatch && lat == null) {
+    if (!hexPairMatch && lat == null && !extractNameHint(path)) {
+      // Last-ditch: a /maps?q=Some+Place URL. Reject only when there's
+      // truly nothing actionable (no hex, no coords, no place-name
+      // segment, and no q= text).
+      const qTextMatch = qParam && !/^-?[0-9.]+,-?[0-9.]+$/.test(qParam)
+          ? qParam : null;
+      if (!qTextMatch) {
+        return {
+          rejection:
+              'That link doesn\'t name a specific place. Open the place on Google Maps, tap Share, then paste here.',
+        };
+      }
+      // We at least have a text query. Pass to admin review.
       return {
-        rejection:
-          'Couldn\'t parse a place from that URL. Try sharing the place from Google Maps again.',
+        kind: 'long_form',
+        place_hex_pair: null,
+        lat: null,
+        lon: null,
+        name_hint: decodeURIComponent(qTextMatch).replace(/\+/g, ' '),
       };
     }
     return {
       kind: 'long_form',
       place_hex_pair: hexPairMatch ? hexPairMatch[1].toLowerCase() : null,
-      lat: lat,
-      lon: lon,
+      lat,
+      lon,
       // Extract the canonical name from the path (the segment between
       // /maps/place/ and the next /). Used for display + admin review.
       name_hint: extractNameHint(path),
@@ -166,7 +213,7 @@ export function parseGoogleMapsUrl(input) {
   }
   return {
     rejection:
-      'Couldn\'t identify a place in that URL. Open the place on Google Maps and use the Share button.',
+      'That link doesn\'t look like a Google Maps place link. Open the place on Google Maps, tap Share → Copy, then paste here.',
   };
 }
 
@@ -229,34 +276,66 @@ function extractNameHint(path) {
   }
 }
 
-/// Expand a maps.app.goo.gl short URL to its canonical long form by
-/// following the redirect. Returns the final URL string. Uses native
-/// fetch with `redirect: 'manual'` so we get the Location header
-/// even when the redirect would otherwise be opaque.
+/// Expand a short URL to its canonical long form by walking up to
+/// MAX_HOPS HTTP redirects. Returns the final URL string.
+///
+/// Some Google share links do A→B→C: the maps.app.goo.gl service
+/// 302s to a maps.google.com URL that 301s to www.google.com/maps/...,
+/// and a 1-hop expander loses the actual place data on the way. The
+/// loop below follows each hop until we hit a non-3xx response OR
+/// the hop count cap.
+const MAX_REDIRECT_HOPS = 5;
+
 export async function expandShortUrl(shortUrl) {
-  // Use HEAD first to be polite — Google's short-link service returns
-  // the same Location header for HEAD as it does for GET.
-  let res;
-  try {
-    res = await fetch(shortUrl, {
-      method: 'HEAD',
-      redirect: 'manual',
-      headers: {
-        // Some Google services require a UA; mirror a common mobile
-        // browser to maximise the chance of getting redirected to the
-        // long URL rather than an "open in Maps app" interstitial.
-        'User-Agent':
-          'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15',
-      },
-    });
-  } catch (e) {
-    throw new Error(`short-url fetch failed: ${e.message}`);
+  let currentUrl = shortUrl;
+  for (let hop = 0; hop < MAX_REDIRECT_HOPS; hop++) {
+    let res;
+    try {
+      // Use HEAD on the first hop. If the server is finicky (some
+      // CDNs return Location only on GET), we fall through to GET on
+      // a retry.
+      res = await fetch(currentUrl, {
+        method: hop === 0 ? 'HEAD' : 'GET',
+        redirect: 'manual',
+        headers: {
+          // Mobile UA — maximises the chance of getting the long URL
+          // rather than an "open in Maps app" interstitial.
+          'User-Agent':
+              'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15',
+          // Some Google services 200 instead of 302 unless we set
+          // Accept: text/html. Cheap belt-and-braces.
+          'Accept': 'text/html,application/xhtml+xml',
+        },
+      });
+    } catch (e) {
+      throw new Error(`short-url fetch failed at hop ${hop}: ${e.message}`);
+    }
+    const status = res.status;
+    const location = res.headers.get('location');
+    if (location) {
+      // Resolve relative redirects against the current URL.
+      try {
+        currentUrl = new URL(location, currentUrl).toString();
+      } catch {
+        currentUrl = location;
+      }
+      // If the new URL is a recognisable long form already, we can
+      // stop — Google sometimes 302s directly to the final destination.
+      if (!/maps\.app\.goo\.gl|maps\.apple|app\/p\//.test(currentUrl)) {
+        return currentUrl;
+      }
+      continue; // chained redirect — keep walking
+    }
+    // No redirect, but the URL itself may already be the long form
+    // (e.g. when a HEAD returns 200 for an already-resolved URL).
+    if (status >= 200 && status < 300) {
+      return currentUrl;
+    }
+    throw new Error(`short-url did not redirect at hop ${hop} (status ${status})`);
   }
-  const location = res.headers.get('location');
-  if (!location) {
-    throw new Error(`short-url did not redirect (status ${res.status})`);
-  }
-  return location;
+  // Hit the hop cap — return whatever the latest URL is so the parser
+  // gets a shot at it instead of failing.
+  return currentUrl;
 }
 
 /// Convenience wrapper: parse, follow short-URL redirects if needed,
