@@ -1359,21 +1359,17 @@ export function renderDashboardHtml() {
 
   // ── Reports ──
   function renderReport(it) {
-    var noteBlock = it.note
-      ? '<div style="margin-top:8px;font-size:12px;color:rgba(255,255,255,0.6);">' + escapeHtml(it.note) + '</div>'
-      : '';
-    var action = it.status === 'open'
-      ? '<button class="btn btn-primary resolve-btn" data-id="' + it.id + '" style="margin-top:12px;">Mark resolved</button>'
-      : '';
-    return '<div class="glass-strong card">' +
-      '<div class="head"><span class="pill pill-' + it.status + '">' + it.status.toUpperCase() + '</span>' +
-      '<span class="meta">' + fmtDate(it.created_at) + '</span></div>' +
-      '<div style="font-weight:600;font-size:13px;">' + escapeHtml(it.reason) +
-      ' <span style="color:rgba(255,255,255,0.4);font-size:11px;">on</span> ' +
-      '<span style="font-family:ui-monospace,monospace;font-size:11px;color:rgba(255,255,255,0.6);">' + escapeHtml(it.place_id) + '</span></div>' +
-      noteBlock +
-      '<div style="margin-top:8px;font-size:11px;color:rgba(255,255,255,0.4);">by ' + escapeHtml(it.reported_by_email || it.reported_by_uid) + '</div>' +
-      action + '</div>';
+    return renderThreadCard({
+      kind: 'reports',
+      item: it,
+      headlineHtml:
+        '<div style="font-weight:700;font-size:13.5px;">' +
+        escapeHtml(it.reason) + '</div>' +
+        (it.note
+          ? '<div style="margin-top:6px;font-size:12px;color:rgba(255,255,255,0.7);">' + escapeHtml(it.note) + '</div>'
+          : ''),
+      meta: it.created_at,
+    });
   }
   function loadReports() {
     var list = $('#reports-list');
@@ -1393,8 +1389,11 @@ export function renderDashboardHtml() {
             })
               .then(function(r) { return r.json(); })
               .then(function(d) { if (!d.ok) throw new Error(d.error); loadReports(); })
-              .catch(function(e) { alert('Resolve failed: ' + e.message); btn.disabled = false; btn.textContent = 'Mark resolved'; });
+              .catch(function(e) { showToast('Resolve failed', friendlyApiError(e), 'err'); btn.disabled = false; btn.textContent = 'Mark resolved'; });
           });
+        });
+        $$('.thread-open-btn').forEach(function(btn) {
+          btn.addEventListener('click', function() { toggleThread(btn); });
         });
       })
       .catch(function(e) {
@@ -1405,43 +1404,231 @@ export function renderDashboardHtml() {
 
   // ── Inquiries ──
   // User-initiated inquiries from the mobile app — typically "the
-  // title is wrong" or "please update the address". Each card shows
-  // the subject, free-text body, and the submitter's email so the
-  // admin can reply to their mailto chain.
+  // title is wrong" or "please update the address".
   function renderInquiry(it) {
-    var placeLink = it.place_id
-      ? '<a class="url" href="#" data-place-jump="' + escapeHtml(it.place_id) + '">place: ' + escapeHtml(it.place_id) + '</a>'
-      : '';
-    var subLink = it.submission_id
-      ? ' <span style="color:rgba(255,255,255,0.4);">| submission: ' + escapeHtml(it.submission_id) + '</span>'
-      : '';
-    var fromLine = it.user_email
-      ? '<a href="mailto:' + escapeHtml(it.user_email) + '" class="url">' + escapeHtml(it.user_email) + '</a>'
-      : escapeHtml(it.user_uid || '(unknown user)');
+    return renderThreadCard({
+      kind: 'inquiries',
+      item: it,
+      headlineHtml:
+        '<h3 class="title" style="margin:0;font-size:15px;">' + escapeHtml(it.subject) + '</h3>' +
+        '<div style="margin-top:8px;font-size:13px;color:rgba(255,255,255,0.85);white-space:pre-wrap;">' + escapeHtml(it.body) + '</div>',
+      meta: it.created_at,
+    });
+  }
+
+  // ── Shared thread-card renderer used by both reports & inquiries ──
+  //
+  // Renders the pill + meta + headline + reporter info + place-context
+  // banner + thread-toggle button + reply input (when open).
+  //
+  // The thread itself is lazy-loaded on first expand — fetch
+  // /api/{kind}/{id}/messages and render bubbles. POST a reply.
+  // On open we ALSO mark-read so the unread badge resets.
+  function renderThreadCard(opts) {
+    var kind = opts.kind; // 'reports' | 'inquiries'
+    var it = opts.item;
+    var meta = opts.meta;
+    var headlineHtml = opts.headlineHtml;
+
+    // Reporter / inquirer info (the "from" line).
+    var fromUid = kind === 'reports' ? it.reported_by_uid : it.user_uid;
+    var fromEmail = kind === 'reports' ? it.reported_by_email : it.user_email;
+    var fromName = kind === 'reports' ? null : it.user_name;
+    var fromLine = fromEmail
+        ? '<a href="mailto:' + escapeHtml(fromEmail) + '" class="url">' + escapeHtml(fromEmail) + '</a>'
+        : escapeHtml(fromUid || '(unknown user)');
+
+    // Place context (when the report/inquiry is about a place).
+    var placeBlock = '';
+    if (it.place_id) {
+      var creator = '';
+      if (it.place_created_by_uid) {
+        var who = it.place_creator_email
+            ? escapeHtml(it.place_creator_email)
+            : escapeHtml(it.place_created_by_uid);
+        creator =
+          '<div style="margin-top:4px;font-size:11.5px;color:rgba(255,255,255,0.6);">' +
+            'Added by user ' + who +
+            (it.place_creator_name
+              ? ' <span style="color:rgba(255,255,255,0.45);">(' + escapeHtml(it.place_creator_name) + ')</span>'
+              : '') +
+            ' via <span class="pill pill-ghost" style="font-size:10px;">' + escapeHtml(it.place_created_via || 'scraper') + '</span>' +
+          '</div>';
+      }
+      placeBlock =
+        '<div style="margin-top:10px;padding:8px 10px;background:rgba(255,255,255,0.04);border-radius:8px;border:1px solid rgba(255,255,255,0.08);">' +
+          '<div style="font-size:12.5px;font-weight:600;">About: ' +
+            (it.place_title ? escapeHtml(it.place_title) : '(place not yet in catalogue)') +
+            (it.place_primary_slug
+              ? ' <span class="pill pill-ghost" style="font-size:10px;margin-left:6px;">' + escapeHtml(it.place_primary_slug) + '</span>'
+              : '') +
+          '</div>' +
+          '<div style="margin-top:2px;font-size:10.5px;font-family:ui-monospace,monospace;color:rgba(255,255,255,0.45);">' + escapeHtml(it.place_id) + '</div>' +
+          creator +
+        '</div>';
+    }
+
+    // Thread summary line (last message preview + unread badge).
+    var unread = it.admin_unread_count || 0;
+    var threadSummary = '';
+    if (it.last_message_preview) {
+      threadSummary =
+        '<div style="margin-top:10px;font-size:12px;color:rgba(255,255,255,0.7);">' +
+          '<b>' + (it.last_message_author === 'admin' ? 'You' : 'User') + ':</b> ' +
+          escapeHtml(it.last_message_preview) +
+          (it.last_message_at
+            ? ' <span style="color:rgba(255,255,255,0.4);">— ' + fmtDate(it.last_message_at) + '</span>'
+            : '') +
+        '</div>';
+    }
+
+    // Resolved-by-prior-singleton-admin_response (legacy single-line
+    // response field, kept for back-compat).
     var responseLine = it.admin_response
-      ? '<div style="margin-top:8px;font-size:12px;color:rgba(255,255,255,0.5);"><b>Admin response:</b> ' + escapeHtml(it.admin_response) + '</div>'
+      ? '<div style="margin-top:8px;font-size:12px;color:rgba(255,255,255,0.55);"><b>Admin response:</b> ' + escapeHtml(it.admin_response) + '</div>'
       : '';
-    var action = it.status === 'open'
-      ? '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">' +
-        '<button class="btn btn-primary inq-resolve-btn" data-id="' + it.id + '">Mark resolved</button>' +
-        (it.user_email
-          ? '<a class="btn btn-ghost" href="mailto:' + escapeHtml(it.user_email) + '?subject=' +
-            encodeURIComponent('Re: ' + (it.subject || 'your inquiry')) + '" target="_blank" rel="noopener">Reply via mail</a>'
+
+    // Action buttons.
+    var resolveBtnCls = kind === 'reports' ? 'resolve-btn' : 'inq-resolve-btn';
+    var actions =
+      '<div style="margin-top:14px;display:flex;gap:6px;flex-wrap:wrap;">' +
+        '<button class="btn btn-ghost thread-open-btn" data-thread-kind="' + kind + '" data-thread-id="' + escapeHtml(it.id) + '">' +
+          'Open thread' +
+          (unread > 0 ? ' <span class="pill pill-pending" style="font-size:10px;margin-left:6px;">' + unread + ' new</span>' : '') +
+        '</button>' +
+        (it.status === 'open'
+          ? '<button class="btn btn-primary ' + resolveBtnCls + '" data-id="' + escapeHtml(it.id) + '">Mark resolved</button>'
           : '') +
-        '</div>'
-      : '';
+        (fromEmail
+          ? '<a class="btn btn-ghost" href="mailto:' + escapeHtml(fromEmail) + '" target="_blank" rel="noopener">Mail</a>'
+          : '') +
+      '</div>';
+
     return '<div class="glass-strong card">' +
       '<div class="head"><span class="pill pill-' + it.status + '">' + it.status.toUpperCase() + '</span>' +
-      '<span class="meta">' + fmtDate(it.created_at) + '</span></div>' +
-      '<h3 class="title">' + escapeHtml(it.subject) + '</h3>' +
-      '<div style="margin-top:6px;font-size:12px;color:rgba(255,255,255,0.6);">from ' + fromLine +
-      (it.user_name ? ' <span style="color:rgba(255,255,255,0.5);">(' + escapeHtml(it.user_name) + ')</span>' : '') +
+      '<span class="meta">' + fmtDate(meta) + '</span></div>' +
+      headlineHtml +
+      '<div style="margin-top:8px;font-size:11.5px;color:rgba(255,255,255,0.55);">from ' + fromLine +
+        (fromName ? ' <span style="color:rgba(255,255,255,0.45);">(' + escapeHtml(fromName) + ')</span>' : '') +
       '</div>' +
-      (placeLink || subLink
-        ? '<div style="margin-top:4px;font-size:11px;color:rgba(255,255,255,0.5);font-family:ui-monospace,monospace;">' + placeLink + subLink + '</div>'
-        : '') +
-      '<div style="margin-top:10px;font-size:13px;color:rgba(255,255,255,0.85);white-space:pre-wrap;">' + escapeHtml(it.body) + '</div>' +
-      responseLine + action + '</div>';
+      placeBlock +
+      threadSummary +
+      responseLine +
+      actions +
+      '<div class="thread-mount" data-mount-kind="' + kind + '" data-mount-id="' + escapeHtml(it.id) + '" style="display:none;"></div>' +
+    '</div>';
+  }
+
+  // Lazy-render the thread under a card. Fetches messages, draws
+  // chat bubbles, wires the reply form. Idempotent — clicking
+  // Open thread again collapses.
+  function toggleThread(btn) {
+    var kind = btn.dataset.threadKind;
+    var id = btn.dataset.threadId;
+    var mount = document.querySelector('.thread-mount[data-mount-kind="' + kind + '"][data-mount-id="' + id + '"]');
+    if (!mount) return;
+    if (mount.style.display === 'block') {
+      mount.style.display = 'none';
+      btn.textContent = 'Open thread';
+      return;
+    }
+    btn.disabled = true;
+    var origLabel = btn.textContent;
+    btn.textContent = 'Loading…';
+    mount.innerHTML = '<div style="padding:8px 0;color:rgba(255,255,255,0.5);font-size:12px;">Loading messages…</div>';
+    mount.style.display = 'block';
+    Promise.all([
+      fetch('/omar-dash/api/' + kind + '/' + encodeURIComponent(id) + '/messages', { credentials: 'same-origin' }).then(function(r) { return r.json(); }),
+      fetch('/omar-dash/api/' + kind + '/' + encodeURIComponent(id) + '/mark-read', { method: 'POST', credentials: 'same-origin' }).then(function(r) { return r.json(); }),
+    ])
+      .then(function(results) {
+        var d = results[0];
+        if (!d.ok) throw new Error(d.error || 'failed');
+        mount.innerHTML = renderThreadInside(d.items, kind, id);
+        wireThreadReply(mount, kind, id);
+      })
+      .catch(function(e) {
+        mount.innerHTML = '<div class="err">Couldn\\'t load thread: ' + escapeHtml(e.message) + '</div>';
+      })
+      .finally(function() {
+        btn.disabled = false;
+        btn.textContent = 'Close thread';
+      });
+  }
+
+  function renderThreadInside(messages, kind, id) {
+    var bubbles = messages.length
+      ? messages.map(function(m) {
+          var who = m.author === 'admin' ? 'You (admin)' : 'User';
+          var align = m.author === 'admin' ? 'flex-end' : 'flex-start';
+          var bg = m.author === 'admin'
+              ? 'rgba(255,149,85,0.18)'
+              : 'rgba(255,255,255,0.06)';
+          return '<div style="display:flex;justify-content:' + align + ';">' +
+            '<div style="max-width:78%;padding:8px 12px;border-radius:12px;background:' + bg + ';border:1px solid rgba(255,255,255,0.08);">' +
+              '<div style="font-size:10.5px;color:rgba(255,255,255,0.55);margin-bottom:2px;">' + escapeHtml(who) + ' · ' + fmtDate(m.created_at) + '</div>' +
+              '<div style="font-size:12.5px;white-space:pre-wrap;">' + escapeHtml(m.body) + '</div>' +
+            '</div>' +
+          '</div>';
+        }).join('')
+      : '<div style="color:rgba(255,255,255,0.5);font-size:12px;text-align:center;padding:12px 0;">No messages yet. Send the first reply below.</div>';
+    return '<div style="margin-top:12px;padding-top:12px;border-top:1px dashed rgba(255,255,255,0.10);">' +
+      '<div style="display:flex;flex-direction:column;gap:8px;max-height:320px;overflow-y:auto;">' + bubbles + '</div>' +
+      '<div style="margin-top:10px;display:flex;gap:6px;">' +
+        '<textarea class="thread-input" placeholder="Reply…" rows="2" style="flex:1;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.10);border-radius:8px;padding:8px 10px;font-size:13px;color:white;resize:vertical;font-family:inherit;"></textarea>' +
+        '<button class="btn btn-primary thread-send-btn" style="align-self:flex-end;">Send</button>' +
+      '</div>' +
+      '<div class="thread-status status-msg full"></div>' +
+    '</div>';
+  }
+
+  function wireThreadReply(mount, kind, id) {
+    var input = mount.querySelector('.thread-input');
+    var btn = mount.querySelector('.thread-send-btn');
+    var status = mount.querySelector('.thread-status');
+    if (!btn || !input) return;
+    btn.addEventListener('click', function() {
+      var body = (input.value || '').trim();
+      if (!body) { status.textContent = 'Type a reply first.'; status.className = 'status-msg full err'; return; }
+      btn.disabled = true;
+      var origLabel = btn.textContent;
+      btn.textContent = 'Sending…';
+      fetch('/omar-dash/api/' + kind + '/' + encodeURIComponent(id) + '/messages', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body: body }),
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (!d.ok) throw new Error(d.error || 'failed');
+          input.value = '';
+          status.textContent = '';
+          // Reload the thread + list so unread/preview update on the
+          // card. Slight delay so the listener catches up.
+          return new Promise(function(resolve) {
+            setTimeout(function() {
+              fetch('/omar-dash/api/' + kind + '/' + encodeURIComponent(id) + '/messages', { credentials: 'same-origin' })
+                .then(function(r) { return r.json(); })
+                .then(function(d2) {
+                  if (d2 && d2.ok) {
+                    mount.innerHTML = renderThreadInside(d2.items, kind, id);
+                    wireThreadReply(mount, kind, id);
+                  }
+                  resolve();
+                });
+            }, 400);
+          });
+        })
+        .catch(function(e) {
+          status.textContent = 'Send failed: ' + e.message;
+          status.className = 'status-msg full err';
+        })
+        .finally(function() {
+          btn.disabled = false;
+          btn.textContent = origLabel;
+        });
+    });
   }
 
   function loadInquiries() {
@@ -1467,8 +1654,11 @@ export function renderDashboardHtml() {
             })
               .then(function(r) { return r.json(); })
               .then(function(d) { if (!d.ok) throw new Error(d.error); loadInquiries(); })
-              .catch(function(e) { alert('Resolve failed: ' + e.message); btn.disabled = false; btn.textContent = 'Mark resolved'; });
+              .catch(function(e) { showToast('Resolve failed', friendlyApiError(e), 'err'); btn.disabled = false; btn.textContent = 'Mark resolved'; });
           });
+        });
+        $$('.thread-open-btn').forEach(function(btn) {
+          btn.addEventListener('click', function() { toggleThread(btn); });
         });
       })
       .catch(function(e) {

@@ -30,6 +30,7 @@ import { makeSubmitPlaceHandler } from './routes/submit-place.js';
 import { makeSupportContactHandler } from './routes/support-contact.js';
 import { makeReportPlaceHandler } from './routes/report-place.js';
 import { makeInquireHandler } from './routes/inquire-place.js';
+import { mountSupportThreads } from './routes/support-threads.js';
 import { mountDashboard } from './dashboard/index.js';
 
 const STORE_PATH = new URL('../../data/places.json', import.meta.url).pathname;
@@ -749,6 +750,12 @@ app.post('/places/:placeId/report', requireAuth(), makeReportPlaceHandler());
 // Mobile also opens a mailto: from the user's own mail app so the
 // admin receives a notification email without us paying for SMTP.
 app.post('/places/inquire', requireAuth(), makeInquireHandler());
+
+// ----- Support threads (chat on reports + inquiries) -----
+// Two-way messaging. Reads happen via direct Firestore subscription
+// on the mobile (cheaper + real-time); the POSTs here handle the
+// auth + ownership check + denormalisation onto the parent doc.
+mountSupportThreads(app, { requireAuth });
 
 // ----- /omar-dash — server-rendered admin dashboard (basic auth) ------
 // Mounts GET /omar-dash + GET/POST /omar-dash/api/* routes for managing

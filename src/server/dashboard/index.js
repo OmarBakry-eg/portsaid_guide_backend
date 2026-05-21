@@ -57,6 +57,11 @@ import {
   deletePlace,
 } from './admin-places.js';
 import { bootLiveStores, liveStoreHealth } from './live-store.js';
+import {
+  postMessage,
+  listMessages,
+  markThreadRead,
+} from '../support-messages.js';
 import { renderDashboardHtml } from './views/dashboard-html.js';
 
 /// Admin credentials. Defaults match the product spec; env vars
@@ -306,6 +311,51 @@ export function mountDashboard(app) {
       res.json({ ok: true, ...out });
     })
   );
+
+  // ── Support threads (reports + inquiries) ──
+  // Admin uses these to read + reply to a thread tied to a specific
+  // report or inquiry. Mobile has parallel endpoints in routes/.
+  for (const parent of ['reports', 'inquiries']) {
+    const parentCollection = parent === 'reports'
+        ? 'place_reports' : 'place_inquiries';
+
+    app.get(
+      '/omar-dash/api/' + parent + '/:id/messages',
+      basicAuthGate,
+      jsonHandler(async (req, res) => {
+        const db = await getFirestore();
+        const items = await listMessages({
+          db, parentCollection, parentId: req.params.id,
+        });
+        res.json({ ok: true, items });
+      })
+    );
+
+    app.post(
+      '/omar-dash/api/' + parent + '/:id/messages',
+      basicAuthGate,
+      jsonHandler(async (req, res) => {
+        const db = await getFirestore();
+        const out = await postMessage({
+          db, parentCollection, parentId: req.params.id,
+          author: 'admin', body: req.body?.body,
+        });
+        res.json({ ok: true, ...out });
+      })
+    );
+
+    app.post(
+      '/omar-dash/api/' + parent + '/:id/mark-read',
+      basicAuthGate,
+      jsonHandler(async (req, res) => {
+        const db = await getFirestore();
+        await markThreadRead({
+          db, parentCollection, parentId: req.params.id, side: 'admin',
+        });
+        res.json({ ok: true });
+      })
+    );
+  }
 
   app.get(
     '/omar-dash/api/inquiries',

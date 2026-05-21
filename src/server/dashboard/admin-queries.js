@@ -182,49 +182,122 @@ export async function listUsers({ limit = 100 }) {
 }
 
 /// List place reports. Optional status filter (default open).
-/// Zero Firestore reads — served from the in-memory streaming store.
+///
+/// Zero per-request Firestore reads — augmented with place title +
+/// creator-user info from the SAME in-memory streams. The dashboard
+/// can render the full context (reported_by, reported_about, was
+/// that place added by a user → who) without any Firestore round-
+/// trips.
+///
+/// Returned per-report fields:
+///   id, place_id, place_title, place_created_by_uid,
+///   place_creator_email, place_creator_name,
+///   reported_by_uid, reported_by_email,
+///   reason, note, status, created_at,
+///   last_message_*, admin_unread_count, user_unread_count
 export async function listReports({ status = 'open', limit = 100 }) {
   const store = await getStore('place_reports');
+  const usersStore = await getStore('users');
+  // Look up reported places via the in-memory places cache (set by
+  // listPlaces or the explicit invalidate/refresh path). On a cold
+  // server, _placesCache may not be populated yet — we degrade
+  // gracefully by leaving the place_* fields null in that case.
+  const placesById = new Map();
+  if (_placesCache) {
+    for (const p of _placesCache) placesById.set(p.place_id, p);
+  }
+  const usersByUid = new Map();
+  for (const u of usersStore.all()) usersByUid.set(u.id, u);
+
   const all = store.all();
   const filtered = (status && status !== 'all')
       ? all.filter((r) => r.status === status)
       : all;
-  return filtered.slice(0, limit).map((r) => ({
-    id: r.id,
-    place_id: r.place_id,
-    reported_by_uid: r.reported_by_uid,
-    reported_by_email: r.reported_by_email,
-    reason: r.reason,
-    note: r.note,
-    status: r.status,
-    created_at: r.created_at_iso || tsIso(r.created_at),
-  }));
+  return filtered.slice(0, limit).map((r) => {
+    const place = r.place_id ? placesById.get(r.place_id) : null;
+    const creatorUid = place?.created_by_uid || null;
+    const creator = creatorUid ? usersByUid.get(creatorUid) : null;
+    return {
+      id: r.id,
+      place_id: r.place_id || null,
+      // Augmented place info — gives the admin context about WHAT
+      // is being reported without a click-through.
+      place_title: place?.title || null,
+      place_primary_slug: place?.primary_slug || null,
+      place_created_via: place?.created_via || null,
+      place_created_by_uid: creatorUid,
+      place_creator_email: creator?.email || null,
+      place_creator_name: creator?.display_name || null,
+      // Reporter info.
+      reported_by_uid: r.reported_by_uid || null,
+      reported_by_email: r.reported_by_email || null,
+      reason: r.reason || null,
+      note: r.note || null,
+      status: r.status,
+      created_at: r.created_at_iso || tsIso(r.created_at),
+      // Thread summary (denormalised from the messages sub-collection).
+      last_message_at: r.last_message_at_iso || tsIso(r.last_message_at),
+      last_message_author: r.last_message_author || null,
+      last_message_preview: r.last_message_preview || null,
+      admin_unread_count: r.admin_unread_count || 0,
+      user_unread_count: r.user_unread_count || 0,
+      resolved_at: tsIso(r.resolved_at),
+      admin_response: r.admin_response || null,
+    };
+  });
 }
 
 /// List user inquiries. Each inquiry is a free-text question/concern
 /// the user sent from the mobile app about one of their submitted /
 /// approved / rejected places. Newest first.
-/// Zero Firestore reads — served from the in-memory streaming store.
+/// Zero per-request Firestore reads.
 export async function listInquiries({ status = 'open', limit = 100 }) {
   const store = await getStore('place_inquiries');
+  // Look up referenced place (when present) so the dashboard can
+  // show what the inquiry is about + who added that place.
+  const placesById = new Map();
+  if (_placesCache) {
+    for (const p of _placesCache) placesById.set(p.place_id, p);
+  }
+  const usersStore = await getStore('users');
+  const usersByUid = new Map();
+  for (const u of usersStore.all()) usersByUid.set(u.id, u);
+
   const all = store.all();
   const filtered = (status && status !== 'all')
       ? all.filter((r) => r.status === status)
       : all;
-  return filtered.slice(0, limit).map((r) => ({
-    id: r.id,
-    user_uid: r.user_uid,
-    user_email: r.user_email,
-    user_name: r.user_name,
-    place_id: r.place_id,
-    submission_id: r.submission_id,
-    subject: r.subject,
-    body: r.body,
-    status: r.status,
-    created_at: r.created_at_iso || tsIso(r.created_at),
-    resolved_at: tsIso(r.resolved_at),
-    admin_response: r.admin_response || null,
-  }));
+  return filtered.slice(0, limit).map((r) => {
+    const place = r.place_id ? placesById.get(r.place_id) : null;
+    const creatorUid = place?.created_by_uid || null;
+    const creator = creatorUid ? usersByUid.get(creatorUid) : null;
+    return {
+      id: r.id,
+      user_uid: r.user_uid,
+      user_email: r.user_email,
+      user_name: r.user_name,
+      place_id: r.place_id || null,
+      place_title: place?.title || null,
+      place_primary_slug: place?.primary_slug || null,
+      place_created_via: place?.created_via || null,
+      place_created_by_uid: creatorUid,
+      place_creator_email: creator?.email || null,
+      place_creator_name: creator?.display_name || null,
+      submission_id: r.submission_id || null,
+      subject: r.subject,
+      body: r.body,
+      status: r.status,
+      created_at: r.created_at_iso || tsIso(r.created_at),
+      resolved_at: tsIso(r.resolved_at),
+      admin_response: r.admin_response || null,
+      // Thread summary.
+      last_message_at: r.last_message_at_iso || tsIso(r.last_message_at),
+      last_message_author: r.last_message_author || null,
+      last_message_preview: r.last_message_preview || null,
+      admin_unread_count: r.admin_unread_count || 0,
+      user_unread_count: r.user_unread_count || 0,
+    };
+  });
 }
 
 /// Mark an inquiry as resolved. Optional `response` is stored so the
