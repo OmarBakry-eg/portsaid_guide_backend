@@ -48,6 +48,24 @@
       ]
     },
     {
+      "_comment_": "Mobile profile Inquiries tab — filter by user_uid, ordered newest-first. Used by lib/features/profile/.../profile_page.dart's _ThreadsTab.",
+      "collectionGroup": "place_inquiries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "user_uid", "order": "ASCENDING" },
+        { "fieldPath": "created_at", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "_comment_": "Mobile profile Reports tab — filter by reported_by_uid, ordered newest-first. Used by lib/features/profile/.../profile_page.dart's _ThreadsTab.",
+      "collectionGroup": "place_reports",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "reported_by_uid", "order": "ASCENDING" },
+        { "fieldPath": "created_at", "order": "DESCENDING" }
+      ]
+    },
+    {
       "_comment_": "Admin dashboard listPlaces — filter by source_categories (array-contains) + order by title. Used by src/server/dashboard/admin-queries.js#listPlaces.",
       "collectionGroup": "places",
       "queryScope": "COLLECTION",
