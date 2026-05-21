@@ -95,13 +95,22 @@ async function loadAllPlaceRows() {
 ///
 /// Limit applied AFTER filtering so a search for "ZAK." doesn't get
 /// cut off by a low limit on the source set.
+/// Returns `{ items, total, total_unfiltered, offset, limit }` so the
+/// dashboard can render pagination controls + a total-count chip.
+///
+/// `items` is the requested page (slice from `offset` of length
+/// `limit`). `total` is the count of rows that survived filtering —
+/// drives the "X of Y" label + page indicator. `total_unfiltered`
+/// is the cache size; useful for the empty-filters case.
 export async function listPlaces({
   mainSlug,
   subSlug,
   search,
   limit = 100,
+  offset = 0,
 }) {
   const rows = await loadAllPlaceRows();
+  const totalUnfiltered = rows.length;
 
   let filtered = rows;
 
@@ -143,7 +152,15 @@ export async function listPlaces({
     return ta < tb ? -1 : ta > tb ? 1 : 0;
   });
 
-  return filtered.slice(0, limit);
+  // Clamp offset so a wild ?offset=999999 doesn't return undefined slices.
+  const safeOffset = Math.max(0, Math.min(offset, filtered.length));
+  return {
+    items: filtered.slice(safeOffset, safeOffset + limit),
+    total: filtered.length,
+    total_unfiltered: totalUnfiltered,
+    offset: safeOffset,
+    limit,
+  };
 }
 
 /// List users by sign-up time (newest first). Includes a quick

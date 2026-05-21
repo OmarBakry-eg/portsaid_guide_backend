@@ -240,13 +240,27 @@ export function mountDashboard(app) {
     '/omar-dash/api/places',
     basicAuthGate,
     jsonHandler(async (req, res) => {
-      const items = await listPlaces({
+      // Pagination: ?limit=500&offset=0|500|1000…
+      // listPlaces returns { items, total, total_unfiltered, offset, limit }
+      // — the dashboard renders "Showing X-Y of Z" + prev/next from
+      // that envelope. Limit is hard-capped at 500 to keep responses
+      // under ~1 MB even on large catalogue snapshots.
+      const result = await listPlaces({
         mainSlug: req.query.main?.toString(),
         subSlug: req.query.sub?.toString(),
         search: req.query.search?.toString(),
         limit: Math.min(parseInt(req.query.limit || '100', 10), 500),
+        offset: Math.max(0, parseInt(req.query.offset || '0', 10) || 0),
       });
-      res.json({ ok: true, count: items.length, items });
+      res.json({
+        ok: true,
+        count: result.items.length,
+        items: result.items,
+        total: result.total,
+        total_unfiltered: result.total_unfiltered,
+        offset: result.offset,
+        limit: result.limit,
+      });
     })
   );
 

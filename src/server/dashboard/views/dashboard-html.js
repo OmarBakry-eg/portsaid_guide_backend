@@ -559,6 +559,10 @@ export function renderDashboardHtml() {
           </button>
           <div class="hint">'main' surfaces all sub-slugs of that main; 'sub' is exact match. Search hits title, type, primary slug, and place_id.</div>
         </div>
+        <!-- "Showing X-Y of Z" label + prev/next buttons +
+             "Total in catalogue: N" chip. Re-rendered on every
+             loadPlaces() resolve via renderPlacesPagination(). -->
+        <div id="places-pagination"></div>
         <div class="glass-strong tbl-wrap">
           <table class="tbl" id="places-table">
             <thead><tr><th>Title</th><th>Type</th><th>Primary</th><th>Rating</th><th>Source</th><th style="text-align:right;">Actions</th></tr></thead>
@@ -1094,27 +1098,46 @@ export function renderDashboardHtml() {
   // Cache the last fetched list so the row-action handlers can look
   // up the full record on Edit without a second network call.
   var _placesById = {};
+  // Page state — survives across loads so prev/next buttons can
+  // walk forward/backward without losing the filter context.
+  var _placesPageSize = 500;
+  var _placesOffset = 0;
+  var _placesTotal = 0;
+  var _placesTotalUnfiltered = 0;
 
-  function loadPlaces() {
+  function loadPlaces(opts) {
+    opts = opts || {};
     var search = $('#places-search').value.trim();
     var main = $('#places-main').value.trim();
     var sub = $('#places-sub').value.trim();
     var tbody = $('#places-table tbody');
     tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">Loading…</td></tr>';
-    // limit of 500 here gives every filtered result room to surface
-    // without forcing the admin to page. The server's listPlaces
-    // applies the limit AFTER filtering, so a substring search like
-    // "ZAK." returns the 1-3 matches it should — without the limit
-    // capping the source set BEFORE the filter (the old bug that
-    // made Z-titled places permanently invisible).
-    var params = new URLSearchParams({ limit: '500' });
+
+    // Reset offset on new search / filter; keep it on next/prev.
+    if (opts.resetOffset) _placesOffset = 0;
+
+    // 500 per page matches the server's hard cap. Filters apply
+    // BEFORE the slice on the server, so a search for "ZAK." returns
+    // its 1-3 matches in a single page regardless of where they
+    // land alphabetically.
+    var params = new URLSearchParams({
+      limit: String(_placesPageSize),
+      offset: String(_placesOffset),
+    });
     if (search) params.set('search', search);
     if (main) params.set('main', main);
     if (sub) params.set('sub', sub);
+
     fetch('/omar-dash/api/places?' + params.toString(), { credentials: 'same-origin' })
       .then(function(r) { return r.json(); })
       .then(function(b) {
         if (!b.ok) throw new Error(b.error);
+        _placesTotal = b.total || b.items.length;
+        _placesTotalUnfiltered = b.total_unfiltered || _placesTotal;
+        _placesOffset = b.offset || 0;
+
+        renderPlacesPagination();
+
         if (!b.items.length) {
           tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">No places match.</td></tr>';
           _placesById = {};
@@ -1143,6 +1166,70 @@ export function renderDashboardHtml() {
         tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">Couldn\\'t load places. See toast for details.</td></tr>';
         showToast('Couldn\\'t load places', friendlyApiError(e), 'err');
       });
+  }
+
+  // Render the "Showing X-Y of Z" label + prev/next buttons +
+  // "Total in catalogue: N" chip into the #places-pagination host.
+  // Recomputed on every loadPlaces() resolve.
+  function renderPlacesPagination() {
+    var host = $('#places-pagination');
+    if (!host) return;
+    var total = _placesTotal;
+    var offset = _placesOffset;
+    var limit = _placesPageSize;
+    var pageEnd = Math.min(offset + limit, total);
+    var hasPrev = offset > 0;
+    var hasNext = pageEnd < total;
+    var pageNumber = Math.floor(offset / limit) + 1;
+    var pageCount = Math.max(1, Math.ceil(total / limit));
+
+    var filterActive = total !== _placesTotalUnfiltered;
+    var totalChip =
+      '<span class="pill pill-ghost" style="font-size:11px;font-weight:600;">' +
+        'Total in catalogue: ' + _placesTotalUnfiltered.toLocaleString() +
+      '</span>';
+    var filteredChip = filterActive
+      ? ' <span class="pill" style="font-size:11px;background:rgba(255,149,85,0.18);color:#ffae7a;">' +
+          'Filtered: ' + total.toLocaleString() +
+        '</span>'
+      : '';
+
+    host.innerHTML =
+      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 4px;font-size:12px;color:rgba(255,255,255,0.7);">' +
+        '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
+          totalChip + filteredChip +
+        '</div>' +
+        '<div style="flex:1;min-width:8px;"></div>' +
+        (total === 0
+          ? ''
+          : '<div style="display:flex;align-items:center;gap:4px;">' +
+              '<span style="margin-right:4px;">Showing ' +
+                (offset + 1).toLocaleString() + '–' + pageEnd.toLocaleString() +
+                ' of ' + total.toLocaleString() +
+              '</span>' +
+              '<button class="btn btn-ghost places-prev-btn" ' +
+                (hasPrev ? '' : 'disabled') + ' style="padding:6px 10px;min-height:30px;">‹ Prev</button>' +
+              '<span style="padding:0 8px;font-size:11.5px;color:rgba(255,255,255,0.55);">' +
+                'Page ' + pageNumber + ' of ' + pageCount +
+              '</span>' +
+              '<button class="btn btn-ghost places-next-btn" ' +
+                (hasNext ? '' : 'disabled') + ' style="padding:6px 10px;min-height:30px;">Next ›</button>' +
+            '</div>') +
+      '</div>';
+
+    var prevBtn = $('.places-prev-btn');
+    var nextBtn = $('.places-next-btn');
+    if (prevBtn) prevBtn.addEventListener('click', function() {
+      _placesOffset = Math.max(0, _placesOffset - _placesPageSize);
+      loadPlaces();
+      // Bring the table back into view after the page change.
+      $('#places-pagination').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    if (nextBtn) nextBtn.addEventListener('click', function() {
+      _placesOffset = _placesOffset + _placesPageSize;
+      loadPlaces();
+      $('#places-pagination').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
   }
 
   // Wire Edit / Delete on every freshly-rendered row.
@@ -2227,8 +2314,14 @@ export function renderDashboardHtml() {
     t.addEventListener('click', function() { setInqStatus(t.dataset.inqStatus); });
   });
   $('#refreshBtn').addEventListener('click', function() { load(currentView); });
-  $('#places-search-btn').addEventListener('click', loadPlaces);
-  $('#places-search').addEventListener('keydown', function(e) { if (e.key === 'Enter') loadPlaces(); });
+  // Search / filter actions reset to page 1 — a new query shouldn't
+  // leave the table mid-pagination on an unrelated slice.
+  $('#places-search-btn').addEventListener('click', function() {
+    loadPlaces({ resetOffset: true });
+  });
+  $('#places-search').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') loadPlaces({ resetOffset: true });
+  });
 
   setSubStatus('pending');
   setRepStatus('open');
