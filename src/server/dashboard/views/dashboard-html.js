@@ -1105,21 +1105,100 @@ export function renderDashboardHtml() {
   var _placesTotal = 0;
   var _placesTotalUnfiltered = 0;
 
+  // Race-condition guards.
+  //   _placesLoadGen   — bumped on every loadPlaces() call. When a
+  //                      response lands, we drop it if gen has moved
+  //                      on (a newer call started while we were
+  //                      waiting). Prevents the "click twice fast,
+  //                      see the wrong page" symptom.
+  //   _placesLoading   — true while a fetch is in flight. The
+  //                      pagination buttons read this to disable
+  //                      themselves; the click handler reads it too
+  //                      as a belt-and-braces guard.
+  //   _placesCache     — client-side LRU keyed by full request
+  //                      params. Survives within a session so
+  //                      flipping back to a recent page is instant
+  //                      (no fetch). 5-min TTL matches the server's
+  //                      listPlaces cache so we never serve newer
+  //                      data than the server would.
+  var _placesLoadGen = 0;
+  var _placesLoading = false;
+  var _placesCache = new Map();
+  var _placesCacheTtlMs = 5 * 60 * 1000;
+  var _placesCacheMaxEntries = 20; // ~20 pages of 500 rows ≈ a typical browse session
+
+  function placesCacheKey(search, main, sub, offset) {
+    return [search || '', main || '', sub || '', offset].join('|');
+  }
+  function placesCacheGet(key) {
+    var entry = _placesCache.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.at > _placesCacheTtlMs) {
+      _placesCache.delete(key);
+      return null;
+    }
+    // Bump LRU position.
+    _placesCache.delete(key);
+    _placesCache.set(key, entry);
+    return entry.value;
+  }
+  function placesCacheSet(key, value) {
+    if (_placesCache.has(key)) _placesCache.delete(key);
+    _placesCache.set(key, { at: Date.now(), value: value });
+    while (_placesCache.size > _placesCacheMaxEntries) {
+      // Drop oldest.
+      var firstKey = _placesCache.keys().next().value;
+      _placesCache.delete(firstKey);
+    }
+  }
+  function placesCacheClearForFilter(search, main, sub) {
+    // After a mutation (create/update/delete) we wipe all pages
+    // matching the current filter so the next loadPlaces refetches
+    // a fresh slice. Filters unrelated to the mutation keep their
+    // cache.
+    var prefix = [search || '', main || '', sub || '', ''].join('|');
+    for (var k of Array.from(_placesCache.keys())) {
+      if (k.indexOf(prefix) === 0) _placesCache.delete(k);
+    }
+  }
+
   function loadPlaces(opts) {
     opts = opts || {};
     var search = $('#places-search').value.trim();
     var main = $('#places-main').value.trim();
     var sub = $('#places-sub').value.trim();
     var tbody = $('#places-table tbody');
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">Loading…</td></tr>';
 
-    // Reset offset on new search / filter; keep it on next/prev.
     if (opts.resetOffset) _placesOffset = 0;
 
-    // 500 per page matches the server's hard cap. Filters apply
-    // BEFORE the slice on the server, so a search for "ZAK." returns
-    // its 1-3 matches in a single page regardless of where they
-    // land alphabetically.
+    var cacheKey = placesCacheKey(search, main, sub, _placesOffset);
+    var cached = placesCacheGet(cacheKey);
+    if (cached && !opts.bypassCache) {
+      // INSTANT path — same params + same offset within TTL. Render
+      // straight from the in-memory copy. Zero network, zero Firestore.
+      _placesTotal = cached.total;
+      _placesTotalUnfiltered = cached.total_unfiltered;
+      _placesOffset = cached.offset;
+      renderPlacesTable(tbody, cached.items);
+      renderPlacesPagination();
+      // Prefetch the neighbours so the next prev/next click is also
+      // instant. Fire-and-forget; never blocks the user.
+      prefetchPlacesAdjacent(search, main, sub, cached.offset, cached.total);
+      return;
+    }
+
+    // No cache hit — fetch with a generation token so out-of-order
+    // responses can be dropped.
+    var gen = ++_placesLoadGen;
+    _placesLoading = true;
+    // Show a loading state on the pagination strip (subtle, doesn't
+    // wipe the rows so the previous page is still visible while we
+    // fetch the next one).
+    renderPlacesPagination();
+    if (!cached) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">Loading…</td></tr>';
+    }
+
     var params = new URLSearchParams({
       limit: String(_placesPageSize),
       offset: String(_placesOffset),
@@ -1131,46 +1210,120 @@ export function renderDashboardHtml() {
     fetch('/omar-dash/api/places?' + params.toString(), { credentials: 'same-origin' })
       .then(function(r) { return r.json(); })
       .then(function(b) {
+        // Drop stale responses — a newer loadPlaces has started.
+        if (gen !== _placesLoadGen) return;
         if (!b.ok) throw new Error(b.error);
+
+        // Cache for next time.
+        placesCacheSet(cacheKey, {
+          items: b.items,
+          total: b.total || b.items.length,
+          total_unfiltered: b.total_unfiltered || (b.total || b.items.length),
+          offset: b.offset || 0,
+        });
+
         _placesTotal = b.total || b.items.length;
         _placesTotalUnfiltered = b.total_unfiltered || _placesTotal;
         _placesOffset = b.offset || 0;
 
-        renderPlacesPagination();
-
-        if (!b.items.length) {
-          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">No places match.</td></tr>';
-          _placesById = {};
-          return;
-        }
-        _placesById = {};
-        tbody.innerHTML = b.items.map(function(p) {
-          _placesById[p.place_id] = p;
-          var rating = (p.rating != null)
-            ? p.rating + ' ★ <span style="color:rgba(255,255,255,0.4);">(' + (p.reviews || 0) + ')</span>'
-            : '—';
-          return '<tr><td><div style="font-weight:600;">' + escapeHtml(p.title) + '</div><div class="place-id">' + escapeHtml(p.place_id) + '</div></td>' +
-            '<td>' + escapeHtml(p.type || '—') + '</td>' +
-            '<td>' + escapeHtml(p.primary_slug || '—') + '</td>' +
-            '<td>' + rating + '</td>' +
-            '<td><span class="pill pill-ghost">' + escapeHtml(p.created_via || 'scraper') + '</span></td>' +
-            '<td><div class="row-actions">' +
-              '<button class="btn btn-ghost place-edit-btn" data-id="' + escapeHtml(p.place_id) + '">Edit</button>' +
-              '<button class="btn btn-danger place-delete-btn" data-id="' + escapeHtml(p.place_id) + '" data-title="' + escapeHtml(p.title || '') + '">Delete</button>' +
-            '</div></td>' +
-          '</tr>';
-        }).join('');
-        wirePlacesRowActions();
+        renderPlacesTable(tbody, b.items);
+        // Prefetch neighbours so subsequent clicks are instant.
+        prefetchPlacesAdjacent(search, main, sub, _placesOffset, _placesTotal);
       })
       .catch(function(e) {
+        if (gen !== _placesLoadGen) return; // also drop stale errors
         tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">Couldn\\'t load places. See toast for details.</td></tr>';
         showToast('Couldn\\'t load places', friendlyApiError(e), 'err');
+      })
+      .finally(function() {
+        if (gen !== _placesLoadGen) return;
+        _placesLoading = false;
+        renderPlacesPagination();
       });
+  }
+
+  // Render the table rows. Split out of loadPlaces so the cache-hit
+  // path can reuse it without duplicating the row HTML. Uses
+  // DocumentFragment+innerHTML on a detached element so the browser
+  // parses 500 rows once, then swaps them in — measurably faster than
+  // setting .innerHTML directly on the live tbody for big lists.
+  function renderPlacesTable(tbody, items) {
+    if (!items.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:rgba(255,255,255,0.5);padding:32px;">No places match.</td></tr>';
+      _placesById = {};
+      return;
+    }
+    _placesById = {};
+    var html = items.map(function(p) {
+      _placesById[p.place_id] = p;
+      var rating = (p.rating != null)
+        ? p.rating + ' ★ <span style="color:rgba(255,255,255,0.4);">(' + (p.reviews || 0) + ')</span>'
+        : '—';
+      return '<tr><td><div style="font-weight:600;">' + escapeHtml(p.title) + '</div><div class="place-id">' + escapeHtml(p.place_id) + '</div></td>' +
+        '<td>' + escapeHtml(p.type || '—') + '</td>' +
+        '<td>' + escapeHtml(p.primary_slug || '—') + '</td>' +
+        '<td>' + rating + '</td>' +
+        '<td><span class="pill pill-ghost">' + escapeHtml(p.created_via || 'scraper') + '</span></td>' +
+        '<td><div class="row-actions">' +
+          '<button class="btn btn-ghost place-edit-btn" data-id="' + escapeHtml(p.place_id) + '">Edit</button>' +
+          '<button class="btn btn-danger place-delete-btn" data-id="' + escapeHtml(p.place_id) + '" data-title="' + escapeHtml(p.title || '') + '">Delete</button>' +
+        '</div></td>' +
+      '</tr>';
+    }).join('');
+    // Build the rows off-DOM via a template, then swap. This avoids
+    // a forced reflow per row that .innerHTML on a live tbody can
+    // trigger when the table is inside a flex/grid parent.
+    var tpl = document.createElement('template');
+    tpl.innerHTML = '<table><tbody>' + html + '</tbody></table>';
+    var newRows = tpl.content.querySelector('tbody').children;
+    tbody.replaceChildren.apply(tbody, Array.from(newRows));
+    wirePlacesRowActions();
+  }
+
+  // Fire-and-forget background fetch of the page on either side of
+  // the current one. The result lands in the client cache, so the
+  // next prev/next click is instant. Guarded by:
+  //   - skip if we've cached that key already
+  //   - skip while another fetch is in flight (don't compete with
+  //     the user-triggered fetch for connection slots)
+  function prefetchPlacesAdjacent(search, main, sub, offset, total) {
+    if (_placesLoading) return;
+    var candidates = [];
+    if (offset > 0) candidates.push(Math.max(0, offset - _placesPageSize));
+    if (offset + _placesPageSize < total) candidates.push(offset + _placesPageSize);
+    candidates.forEach(function(target) {
+      var key = placesCacheKey(search, main, sub, target);
+      if (placesCacheGet(key)) return;
+      var params = new URLSearchParams({
+        limit: String(_placesPageSize),
+        offset: String(target),
+      });
+      if (search) params.set('search', search);
+      if (main) params.set('main', main);
+      if (sub) params.set('sub', sub);
+      // No await — runs in parallel with the user's interactions.
+      fetch('/omar-dash/api/places?' + params.toString(), {
+        credentials: 'same-origin',
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(b) {
+          if (!b || !b.ok) return;
+          placesCacheSet(key, {
+            items: b.items,
+            total: b.total || b.items.length,
+            total_unfiltered: b.total_unfiltered || (b.total || b.items.length),
+            offset: b.offset || 0,
+          });
+        })
+        .catch(function() { /* silent — prefetch is best-effort */ });
+    });
   }
 
   // Render the "Showing X-Y of Z" label + prev/next buttons +
   // "Total in catalogue: N" chip into the #places-pagination host.
-  // Recomputed on every loadPlaces() resolve.
+  // Re-runs on every loadPlaces resolve AND while loading=true (to
+  // disable the buttons during a fetch — that's what fixes the
+  // "click fast → page jumps" race).
   function renderPlacesPagination() {
     var host = $('#places-pagination');
     if (!host) return;
@@ -1193,11 +1346,17 @@ export function renderDashboardHtml() {
           'Filtered: ' + total.toLocaleString() +
         '</span>'
       : '';
+    var loadingChip = _placesLoading
+      ? ' <span class="pill" style="font-size:11px;background:rgba(120,160,255,0.18);color:#97b6ff;">Loading…</span>'
+      : '';
+
+    // Buttons are disabled during loading — race fix.
+    var disabledAttr = _placesLoading ? 'disabled' : '';
 
     host.innerHTML =
       '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 4px;font-size:12px;color:rgba(255,255,255,0.7);">' +
         '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">' +
-          totalChip + filteredChip +
+          totalChip + filteredChip + loadingChip +
         '</div>' +
         '<div style="flex:1;min-width:8px;"></div>' +
         (total === 0
@@ -1208,27 +1367,31 @@ export function renderDashboardHtml() {
                 ' of ' + total.toLocaleString() +
               '</span>' +
               '<button class="btn btn-ghost places-prev-btn" ' +
-                (hasPrev ? '' : 'disabled') + ' style="padding:6px 10px;min-height:30px;">‹ Prev</button>' +
+                ((hasPrev && !_placesLoading) ? '' : 'disabled') +
+                ' style="padding:6px 10px;min-height:30px;">‹ Prev</button>' +
               '<span style="padding:0 8px;font-size:11.5px;color:rgba(255,255,255,0.55);">' +
                 'Page ' + pageNumber + ' of ' + pageCount +
               '</span>' +
               '<button class="btn btn-ghost places-next-btn" ' +
-                (hasNext ? '' : 'disabled') + ' style="padding:6px 10px;min-height:30px;">Next ›</button>' +
+                ((hasNext && !_placesLoading) ? '' : 'disabled') +
+                ' style="padding:6px 10px;min-height:30px;">Next ›</button>' +
             '</div>') +
       '</div>';
 
     var prevBtn = $('.places-prev-btn');
     var nextBtn = $('.places-next-btn');
     if (prevBtn) prevBtn.addEventListener('click', function() {
+      // Belt-and-braces guard. The disabled attribute SHOULD block
+      // these but Safari occasionally fires the click anyway when
+      // the disabled state was set in the same tick.
+      if (_placesLoading) return;
       _placesOffset = Math.max(0, _placesOffset - _placesPageSize);
       loadPlaces();
-      // Bring the table back into view after the page change.
-      $('#places-pagination').scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
     if (nextBtn) nextBtn.addEventListener('click', function() {
+      if (_placesLoading) return;
       _placesOffset = _placesOffset + _placesPageSize;
       loadPlaces();
-      $('#places-pagination').scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   }
 
